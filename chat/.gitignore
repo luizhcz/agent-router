@@ -1,0 +1,5 @@
+node_modules/
+# Índice denso do router, persistido em disco (reconstrói pelo fingerprint)
+src/router/.cache/
+.cache/
+*.log

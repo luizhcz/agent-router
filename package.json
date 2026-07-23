@@ -1,0 +1,40 @@
+{
+  "name": "agent-router",
+  "version": "0.1.0",
+  "description": "Roteador de intenções multilíngue: embedding + kNN + rerank para reduzir N comandos a um top-K enxuto antes da LLM",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "router": "tsx src/cli/repl.ts",
+    "index:build": "tsx src/cli/build-index.ts",
+    "eval": "tsx src/cli/eval.ts",
+    "bench": "tsx src/cli/bench.ts"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.10"
+  }
+}

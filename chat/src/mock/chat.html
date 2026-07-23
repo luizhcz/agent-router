@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trader Chat — Mock</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0f1115;
+      color: #e6e6e6;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 12px 16px;
+      background: #171a21;
+      border-bottom: 1px solid #262b35;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    header .dot { width: 8px; height: 8px; border-radius: 50%; background: #37c871; }
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .msg { max-width: 78%; padding: 10px 13px; border-radius: 14px; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word; }
+    .msg.user { align-self: flex-end; background: #2f6feb; color: #fff; border-bottom-right-radius: 4px; }
+    .msg.agent { align-self: flex-start; background: #20242e; border: 1px solid #2b303b; border-bottom-left-radius: 4px; }
+    .msg.system { align-self: center; background: transparent; color: #7a8291; font-size: 12px; padding: 2px; }
+    form {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px;
+      background: #171a21;
+      border-top: 1px solid #262b35;
+    }
+    #input {
+      flex: 1;
+      padding: 11px 14px;
+      border-radius: 22px;
+      border: 1px solid #2b303b;
+      background: #0f1115;
+      color: #e6e6e6;
+      font-size: 15px;
+      outline: none;
+    }
+    #input:focus { border-color: #2f6feb; }
+    button {
+      padding: 0 20px;
+      border-radius: 22px;
+      border: none;
+      background: #2f6feb;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .5; cursor: default; }
+    .typing { font-style: italic; color: #7a8291; }
+  </style>
+</head>
+<body>
+  <header><span class="dot"></span> Trader Chat <span style="color:#7a8291;font-weight:400;font-size:12px;">(mock)</span></header>
+  <div id="messages"></div>
+  <form id="form">
+    <input id="input" type="text" placeholder="Pergunte sobre PETR4, sua carteira..." autocomplete="off" />
+    <button id="send" type="submit">Enviar</button>
+  </form>
+
+  <script>
+    (function () {
+      var API = '/api/trader-chat';
+      var HEADERS = {
+        'Content-Type': 'application/json',
+        'x-efs-account': '123456',
+        'context-id': 'digital:123456'
+      };
+
+      var messagesEl = document.getElementById('messages');
+      var form = document.getElementById('form');
+      var input = document.getElementById('input');
+      var sendBtn = document.getElementById('send');
+      var polling = false;
+
+      function addMessage(role, content) {
+        var div = document.createElement('div');
+        div.className = 'msg ' + role;
+        div.textContent = content;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return div;
+      }
+
+      function addTyping() {
+        var div = addMessage('agent', 'digitando...');
+        div.classList.add('typing');
+        return div;
+      }
+
+      // Long-poll: aguarda uma mensagem do agente (role: 'agent').
+      function pollForAgent(typingEl) {
+        fetch(API, { method: 'GET', headers: HEADERS })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (msg) {
+            if (msg && msg.role === 'agent') {
+              if (typingEl) { typingEl.classList.remove('typing'); typingEl.textContent = msg.content; }
+              else { addMessage('agent', msg.content); }
+              polling = false;
+              sendBtn.disabled = false;
+            } else {
+              // sem resposta ainda (timeout do long-poll) -> tenta de novo
+              pollForAgent(typingEl);
+            }
+          })
+          .catch(function () {
+            // erro transitório -> re-tenta após breve espera
+            setTimeout(function () { pollForAgent(typingEl); }, 1500);
+          });
+      }
+
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var text = input.value.trim();
+        if (!text || polling) return;
+
+        addMessage('user', text);
+        input.value = '';
+        sendBtn.disabled = true;
+        polling = true;
+
+        var typingEl = addTyping();
+
+        fetch(API, {
+          method: 'POST',
+          headers: HEADERS,
+          body: JSON.stringify({ content: text })
+        })
+          .then(function () { pollForAgent(typingEl); })
+          .catch(function () {
+            typingEl.classList.remove('typing');
+            typingEl.textContent = 'Erro ao enviar. Tente novamente.';
+            polling = false;
+            sendBtn.disabled = false;
+          });
+      });
+
+      addMessage('system', 'Conectado como conta 123456');
+      input.focus();
+    })();
+  </script>
+</body>
+</html>

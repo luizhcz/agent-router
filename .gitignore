@@ -1,0 +1,28 @@
+# Dependências
+node_modules/
+
+# Build
+dist/
+*.tsbuildinfo
+
+# Cache do índice do roteador (denso, persistido em disco)
+.cache/
+# Artefatos do índice, caso o cacheDir seja apontado para outro lugar
+index-*.bin
+index-*.meta.json
+
+# Espaço de rascunho / experimentos
+.scratch/
+
+# Pesos de modelos locais (offline) — baixados sob demanda, grandes; não versionar.
+# Rebaixe com: models/<modelo>/onnx/model.onnx a partir do repo Xenova no HF Hub.
+models/
+
+# Logs
+*.log
+
+# Variáveis de ambiente (podem conter credenciais). Versione apenas .env.example.
+.env
+.env.local
+.env.*.local
+!.env.example
