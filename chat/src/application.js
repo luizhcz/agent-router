@@ -122,10 +122,11 @@ class Application {
         const dbConn = env['DB_CONVERSATION_CONNECTION']
         const redisUrl = env['REDIS_CONVERSATION_ENDPOINT']
 
+        // O schema (DDL) NÃO é criado aqui — vive em chat/schema.sql, aplicado fora da
+        // aplicação (docker-compose init do Postgres ou psql -f). A app só faz DML.
         const pgConversations = dbConn ? new PostgresClient() : new PgClient()
         await pgConversations.initialize(dbConn)
         const durableStore = new PgConversationStore(pgConversations)
-        await durableStore.init() // CREATE TABLE IF NOT EXISTS conversations (...)
 
         const redisConversations = redisUrl ? new RealRedisClient() : new RedisClient()
         await redisConversations.initialize(redisUrl)
@@ -141,10 +142,9 @@ class Application {
         console.log(`[Conversation] registro pronto (${dbConn ? 'Postgres REAL' : 'pg-mock'} + ${redisUrl ? 'Redis REAL' : 'redis-mock'} write-through) — agentes: ${availableAgents.join('/')} · versão padrão: ${defaultVersion}`)
 
         // Log de auditoria/KPIs (append-only): turns / routing_events / routing_candidates
-        // / command_executions / llm_calls. Reusa o mesmo Postgres (mock). O runtime grava
-        // 1 turno por mensagem, best-effort (nunca quebra o chat).
+        // / command_executions / llm_calls. Reusa o mesmo Postgres. O runtime grava
+        // 1 turno por mensagem, best-effort (nunca quebra o chat). Tabelas: chat/schema.sql.
         const auditLog = new AuditLog(pgConversations)
-        await auditLog.init() // CREATE TABLE IF NOT EXISTS ...
         EnvUtils.setInstance('auditLog', auditLog)
         console.log(`[Audit] log de KPIs pronto (turns/routing/command_executions/llm_calls)`)
 

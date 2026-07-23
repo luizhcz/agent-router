@@ -5,16 +5,13 @@
 // não somar latência ao turno, e torná-lo obrigatório se compliance exigir.
 
 const crypto = require('crypto')
-const { initSchema } = require('./schema')
 
 class AuditLog {
     constructor(pg) {
         this.pg = pg
     }
 
-    async init() {
-        await initSchema(this.pg)
-    }
+    // DDL não vive aqui — as tabelas são criadas por chat/schema.sql (fora da aplicação).
 
     /**
      * Grava um turno completo. `t` é o payload cru montado pelo runtime; a

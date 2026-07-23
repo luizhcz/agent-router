@@ -13,22 +13,7 @@ class PgConversationStore {
         this.pg = pg
     }
 
-    async init() {
-        await this.pg.query(`
-            CREATE TABLE IF NOT EXISTS ${TABLE} (
-                id TEXT PRIMARY KEY,
-                owner_mode TEXT,
-                owner_account TEXT,
-                owner_user_profile_id TEXT,
-                version TEXT,
-                agents JSONB,
-                status TEXT,
-                created_at BIGINT,
-                last_activity_at BIGINT,
-                expires_at BIGINT
-            )
-        `)
-    }
+    // DDL não vive aqui — o schema é criado por chat/schema.sql (fora da aplicação).
 
     // UPSERT: cria na 1ª vez, atualiza status/atividade nas seguintes.
     async save(record) {
