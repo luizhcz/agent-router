@@ -2,8 +2,36 @@
 //
 // O AgentRuntime já extrai, por reflexão, cada comando com { method, agent, notes,
 // examples, inputs }. Aqui convertemos isso no shape que o pacote agent-router
-// (../../../dist) espera em `Catalog` — reaproveitando os `@example` do domínio
-// como utterances (frases reais de usuário) e as siglas/tickers como keywords.
+// (../../../dist) espera em `Catalog`. As utterances (frases de usuário para o kNN)
+// vêm de DUAS fontes, fundidas:
+//   1) os `@example` do comentário do comando — que TAMBÉM vão no prompt da LLM;
+//   2) um SIDECAR por-agente em `utterances/<agente>.json` (chaveado por método) —
+//      consumido SÓ pelo router, NUNCA vai ao prompt. Crescer recall = adicionar
+//      frases no sidecar (custo só de índice offline; zero token por requisição).
+
+const fs = require('fs');
+const path = require('path');
+
+/** Carrega `utterances/<agente>.json` → { [agente]: { [método]: [frases] } }. */
+function loadAgentUtterances(dir) {
+  const byAgent = {};
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+  } catch {
+    return byAgent; // sem diretório => sem sidecar (só os @example do comentário)
+  }
+  for (const f of files) {
+    const agent = f.replace(/\.json$/, '');
+    try {
+      const obj = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      if (obj && typeof obj === 'object') byAgent[agent] = obj;
+    } catch {
+      // arquivo malformado NÃO pode quebrar o router
+    }
+  }
+  return byAgent;
+}
 
 // Palavras que NÃO identificam um comando (poluiriam o BM25): verbos genéricos,
 // marcadores de exemplo, e palavras PT/EN em caixa alta que aparecem nas descrições.
@@ -88,7 +116,9 @@ function mainDescription(cmd) {
  * para o mapeamento de volta ao runtime. Comandos 'system' (greetings/notFound)
  * são incluídos para o router poder roteá-los também.
  */
-function buildCatalog(commandElements) {
+function buildCatalog(commandElements, opts = {}) {
+  const utterancesDir = opts.utterancesDir || path.join(__dirname, 'utterances');
+  const sidecar = loadAgentUtterances(utterancesDir);
   const agentsSeen = new Set();
   const commands = [];
 
@@ -111,6 +141,14 @@ function buildCatalog(commandElements) {
         utterances.push(stripArgs(n.text));
       }
     }
+    // Sidecar por-agente (SÓ o router; nunca no prompt) — a alavanca de recall.
+    const extra = sidecar[agent] && sidecar[agent][cmd.method];
+    if (Array.isArray(extra)) {
+      for (const u of extra) {
+        const s = stripArgs(String(u));
+        if (s.length >= 2) utterances.push(s);
+      }
+    }
     const description = mainDescription(cmd);
 
     commands.push({
@@ -119,7 +157,8 @@ function buildCatalog(commandElements) {
       method: cmd.method, // extra: mapeia o candidato de volta ao runtime
       name: cmd.method,
       description,
-      utterances: [...new Set(utterances)].filter(Boolean).slice(0, 16),
+      // cap generoso: no índice offline, mais utterances é praticamente de graça.
+      utterances: [...new Set(utterances)].filter(Boolean).slice(0, 60),
       keywords: extractKeywords(description, exampleTexts),
       params: (cmd.inputs || []).map((i) => ({
         name: i.name,
