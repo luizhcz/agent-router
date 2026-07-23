@@ -777,7 +777,15 @@ class AgentRuntime {
             }
             filter['greetings'] = true
             filter['notFound'] = true
-            context.lastRoute = { methods: routed.methods, agents: routed.agents, abstained: routed.abstained }
+            context.lastRoute = {
+                methods: routed.methods,
+                agents: routed.agents,
+                abstained: routed.abstained,
+                candidates: routed.candidates,   // {method, agent, score} — p/ routing_candidates
+                modelId: routed.modelId,
+                fingerprint: routed.fingerprint,
+                latencyMs: routed.timings?.totalMs,
+            }
             return filter
         } catch (err) {
             console.error('[Router] falha ao rotear, usando todos os comandos:', err.message)
@@ -785,10 +793,46 @@ class AgentRuntime {
         }
     }
 
+    /**
+     * Emite o turno para o log de auditoria/KPIs (EnvUtils 'auditLog'), best-effort.
+     * Chamado DEPOIS de responder ao usuário; nunca quebra o chat. Sem auditLog, no-op.
+     */
+    _recordTurn(context, msg, res, llmCalls, totalMs) {
+        const auditLog = EnvUtils.getInstance('auditLog')
+        if (!auditLog) {
+            return
+        }
+        try {
+            auditLog.recordTurn({
+                conversationId: context.conversation?.id || null,
+                contextId: context.contextId,
+                seq: context.messages.filter(m => m.role === 'user').length,
+                userText: msg?.content,
+                agentText: res?.content,
+                state: msg?.state,
+                nextState: msg?.stateNext,
+                interrupt: msg?.interrupt,
+                results: msg?.results,
+                routing: context.lastRoute,
+                commandAgentByMethod: this.commandAgentByMethod,
+                outputCardType: context.agent?.outputCard?.type || null,
+                llmCalls,
+                totalLatencyMs: totalMs,
+            })
+        } catch (e) {
+            // auditoria nunca quebra o chat
+        }
+    }
+
     processMessageBind = this.processMessage.bind(this)
     async processMessage(context) {
 
+        const t0 = Date.now()
+        const llmCalls = [] // instrumentação p/ o log de KPIs (llm_calls)
+
         try {
+
+            context.lastRoute = undefined // roteamento é por-turno; evita atribuir o do turno anterior
 
             const msg = context.messages[context.messages.length - 1]
             const msgContent = msg.content
@@ -811,7 +855,9 @@ class AgentRuntime {
                 const promptIn = this.getPromptIn(context, filterCommands)
                 // fs.writeFileSync('./prompt-in-data.txt', promptIn)
 
+                const tJson = Date.now()
                 mcmds = await this.llmService.execute(promptIn, 'json')
+                llmCalls.push({ mode: 'json', latencyMs: Date.now() - tJson, parseOk: Array.isArray(mcmds) })
                 mcmds = mcmds
                     .map(group => group.filter(cmd => context.agent.isCommandAvailable?.(cmd.type) ?? true))
                     .filter(group => group.length > 0)
@@ -939,12 +985,18 @@ class AgentRuntime {
                 filterCommands = Object.keys(filterCommands)
                 const promptOut = this.getPromptOut(context, data, filterCommands, interrupt)
                 // fs.writeFileSync('./prompt-out-data.txt', promptOut)
+                const tText = Date.now()
                 res = await this.llmService.execute(promptOut, 'text')
+                llmCalls.push({ mode: 'text', latencyMs: Date.now() - tText, parseOk: true })
             }
             res = { role: 'agent', content: res }
 
             context.messages.push(res)
             context.messagesSignal.set()
+
+            // Log de auditoria/KPIs — best-effort, DEPOIS de responder ao usuário
+            // (não soma latência ao turno) e nunca quebra o chat.
+            this._recordTurn(context, msg, res, llmCalls, Date.now() - t0)
 
         } catch (err) {
             console.error('[Error] [processMessage]', err)

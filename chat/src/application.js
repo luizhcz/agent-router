@@ -17,6 +17,7 @@ const { PositionService } = require("./mock/position-service")
 const { PortfolioRecommender } = require("./mock/portfolio-recommender")
 const { WriteThroughStore, PgConversationStore, RedisConversationStore, ConversationService } = require("./conversation")
 const { PgClient } = require("./mock/postgres-client")
+const { AuditLog } = require("./audit")
 
 class Application {
 
@@ -131,6 +132,14 @@ class Application {
         EnvUtils.setInstance('conversationService', conversationService)
         EnvUtils.setInstance('conversationPg', pgConversations)
         console.log(`[Conversation] registro pronto (Postgres+Redis write-through) — agentes: ${availableAgents.join('/')} · versão padrão: ${defaultVersion}`)
+
+        // Log de auditoria/KPIs (append-only): turns / routing_events / routing_candidates
+        // / command_executions / llm_calls. Reusa o mesmo Postgres (mock). O runtime grava
+        // 1 turno por mensagem, best-effort (nunca quebra o chat).
+        const auditLog = new AuditLog(pgConversations)
+        await auditLog.init() // CREATE TABLE IF NOT EXISTS ...
+        EnvUtils.setInstance('auditLog', auditLog)
+        console.log(`[Audit] log de KPIs pronto (turns/routing/command_executions/llm_calls)`)
 
         httpServer.use((req, res, next) => {
             req.ack(30_000)

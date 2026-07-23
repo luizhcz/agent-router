@@ -6,6 +6,7 @@
 // resolve do node_modules do pacote raiz (o dist vive sob ele).
 
 const path = require('path');
+const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 
 const { buildCatalog } = require('./catalog-builder');
@@ -33,6 +34,15 @@ class ChatIntentRouter {
     const { IntentRouter, createEmbeddingProvider, MODEL_PRESETS } = mod;
 
     this.catalog = buildCatalog(commandElements);
+
+    // Identificadores para atribuição de KPIs (routing_events): modelo + fingerprint
+    // do catálogo (muda quando um comando/utterance é editado).
+    this.modelId = 'paraphrase-multilingual-MiniLM-L12-v2';
+    this.fingerprint = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(this.catalog.commands.map((c) => ({ id: c.id, d: c.description, u: c.utterances }))))
+      .digest('hex')
+      .slice(0, 16);
 
     // MiniLM simétrico 384d, carregado da pasta local (sem rede).
     const embedder = await createEmbeddingProvider({
@@ -82,6 +92,8 @@ class ChatIntentRouter {
       methods: candidates.map((c) => c.command.method),
       agents: [...new Set(candidates.map((c) => c.command.agent))],
       abstained: res.abstained,
+      modelId: this.modelId,
+      fingerprint: this.fingerprint,
       candidates: candidates.map((c) => ({
         method: c.command.method,
         agent: c.command.agent,
