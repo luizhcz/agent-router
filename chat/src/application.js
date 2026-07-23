@@ -15,7 +15,8 @@ const path = require('path')
 const fs = require('fs')
 const { PositionService } = require("./mock/position-service")
 const { PortfolioRecommender } = require("./mock/portfolio-recommender")
-const { ConversationStore, ConversationService } = require("./conversation")
+const { WriteThroughStore, PgConversationStore, RedisConversationStore, ConversationService } = require("./conversation")
+const { PgClient } = require("./mock/postgres-client")
 
 class Application {
 
@@ -110,17 +111,26 @@ class Application {
             console.error('[Router] indisponível, seguindo sem pré-filtro:', err.message)
         }
 
-        // Registro de conversas (config durável: versão + agentes + dono). Store sobre
-        // Redis (mock hoje). Agentes disponíveis e versão padrão vêm do runtime.
+        // Registro de conversas (config durável: versão + agentes + dono).
+        // WRITE-THROUGH: Postgres (fonte da verdade, auditável) + Redis (cache quente).
+        // Ambos são mocks in-memory hoje; trocar por `pg`/Redis reais não muda os stores.
+        const pgConversations = new PgClient()
+        await pgConversations.initialize(env['DB_CONVERSATION_CONNECTION'])
+        const durableStore = new PgConversationStore(pgConversations)
+        await durableStore.init() // CREATE TABLE IF NOT EXISTS conversations (...)
+
         const redisConversations = new RedisClient()
         await redisConversations.initialize(env['REDIS_CONVERSATION_ENDPOINT'])
-        const conversationStore = new ConversationStore(redisConversations)
+        const cacheStore = new RedisConversationStore(redisConversations)
+
+        const conversationStore = new WriteThroughStore({ durable: durableStore, cache: cacheStore })
         const availableAgents = [...new Set(runtime.commandElements.map(c => c.agent))].filter(a => a && a !== 'system')
         const promptVersions = runtime._promptVersions || []
         const defaultVersion = promptVersions[promptVersions.length - 1]
         const conversationService = new ConversationService({ store: conversationStore, availableAgents, defaultVersion })
         EnvUtils.setInstance('conversationService', conversationService)
-        console.log(`[Conversation] registro pronto — agentes: ${availableAgents.join('/')} · versão padrão: ${defaultVersion}`)
+        EnvUtils.setInstance('conversationPg', pgConversations)
+        console.log(`[Conversation] registro pronto (Postgres+Redis write-through) — agentes: ${availableAgents.join('/')} · versão padrão: ${defaultVersion}`)
 
         httpServer.use((req, res, next) => {
             req.ack(30_000)

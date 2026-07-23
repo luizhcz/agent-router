@@ -1,38 +1,29 @@
-// Store do registro de conversa (config durável: versão + agentes + dono).
-// Abstração sobre um cliente Redis (mock hoje, real depois). O ESTADO TRANSIENTE
-// (mensagens, memória do agente) NÃO vive aqui — fica em runtime.contexts, em
-// memória, chaveado pelo mesmo conversationId. Ver docs/design-notes.md (Parte 2).
+// Store de conversa com WRITE-THROUGH: o durável (Postgres) é a FONTE DA VERDADE
+// e o cache (Redis) é o caminho quente. Este objeto é dono do lifecycle do
+// registro (mint do id opaco, status, timestamps, TTL) e orquestra os dois
+// sub-stores (que só sabem save/load/remove). O ConversationService fala só com
+// esta interface (create/get/touch/close/delete), então trocar a persistência
+// não toca o service. Ver docs/design-notes.md (Parte 2, "Armazenamento").
 
 const crypto = require('crypto')
+const { DEFAULT_TTL_SECONDS } = require('./store-redis')
 
-const PREFIX = 'conversation:'
-const DEFAULT_TTL_SECONDS = 8 * 60 * 60 // 8h de inatividade
+function mintId() {
+    // Token opaco de alta entropia (capability). Nunca sequencial/adivinhável.
+    return 'conv_' + crypto.randomBytes(18).toString('base64url')
+}
 
-class ConversationStore {
-    constructor(redis, { ttlSeconds = DEFAULT_TTL_SECONDS } = {}) {
-        this.redis = redis
+class WriteThroughStore {
+    constructor({ durable, cache, ttlSeconds = DEFAULT_TTL_SECONDS }) {
+        this.durable = durable // Postgres — fonte da verdade
+        this.cache = cache // Redis — cache quente
         this.ttlSeconds = ttlSeconds
     }
 
-    // Token opaco de alta entropia (capability). Nunca sequencial/adivinhável.
-    _mintId() {
-        return 'conv_' + crypto.randomBytes(18).toString('base64url')
-    }
-
-    _key(id) {
-        return PREFIX + id
-    }
-
-    async _put(rec) {
-        await this.redis.set(this._key(rec.id), JSON.stringify(rec), this.ttlSeconds)
-        return rec
-    }
-
-    async create(config) {
-        const id = this._mintId()
+    _newRecord(config) {
         const now = Date.now()
-        const rec = {
-            id,
+        return {
+            id: mintId(),
             version: config.version,
             agents: config.agents,
             owner: config.owner,
@@ -41,39 +32,47 @@ class ConversationStore {
             lastActivityAt: now,
             expiresAt: now + this.ttlSeconds * 1000,
         }
-        return this._put(rec)
+    }
+
+    async create(config) {
+        const record = this._newRecord(config)
+        await this.durable.save(record) // grava no banco primeiro (fonte da verdade)
+        await this.cache.save(record) // aquece o cache
+        return record
     }
 
     async get(id) {
-        if (!id) return null
-        const raw = await this.redis.get(this._key(id))
-        if (!raw) return null
-        try {
-            return JSON.parse(raw)
-        } catch {
-            return null
-        }
+        let record = await this.cache.load(id)
+        if (record) return record
+        // miss no cache (expirou/restart do Redis) => banco, e reaquece o cache
+        record = await this.durable.load(id)
+        if (record) await this.cache.save(record)
+        return record
     }
 
-    // Renova TTL + lastActivityAt a cada uso (janela deslizante de inatividade).
     async touch(id) {
-        const rec = await this.get(id)
-        if (!rec) return null
-        rec.lastActivityAt = Date.now()
-        rec.expiresAt = rec.lastActivityAt + this.ttlSeconds * 1000
-        return this._put(rec)
+        const record = await this.get(id)
+        if (!record) return null
+        record.lastActivityAt = Date.now()
+        record.expiresAt = record.lastActivityAt + this.ttlSeconds * 1000
+        await this.durable.save(record)
+        await this.cache.save(record)
+        return record
     }
 
     async close(id) {
-        const rec = await this.get(id)
-        if (!rec) return null
-        rec.status = 'closed'
-        return this._put(rec)
+        const record = await this.get(id)
+        if (!record) return null
+        record.status = 'closed'
+        await this.durable.save(record)
+        await this.cache.save(record)
+        return record
     }
 
     async delete(id) {
-        await this.redis.del(this._key(id))
+        await this.durable.remove(id)
+        await this.cache.remove(id)
     }
 }
 
-module.exports = { ConversationStore }
+module.exports = { WriteThroughStore, mintId }

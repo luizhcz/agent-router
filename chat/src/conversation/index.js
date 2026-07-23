@@ -1,6 +1,15 @@
 // Conversa como recurso provisionado (versão + agentes + dono). Ver docs/design-notes.md (Parte 2).
-const { ConversationStore } = require('./store')
+// Persistência write-through: Postgres (durável) + Redis (cache quente).
+const { WriteThroughStore } = require('./store')
+const { PgConversationStore } = require('./store-pg')
+const { RedisConversationStore } = require('./store-redis')
 const { ConversationService } = require('./service')
 const { HttpError } = require('./errors')
 
-module.exports = { ConversationStore, ConversationService, HttpError }
+module.exports = {
+    WriteThroughStore,
+    PgConversationStore,
+    RedisConversationStore,
+    ConversationService,
+    HttpError,
+}
