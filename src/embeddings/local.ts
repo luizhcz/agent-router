@@ -129,7 +129,9 @@ export const MODEL_PRESETS = {
     asymmetric: false,
     queryPrefix: '',
     documentPrefix: '',
-    dtype: 'fp32',
+    // q8 (int8) => onnx/model_quantized.onnx (~118MB vs 448MB do fp32). Perda de
+    // recall desprezível em roteamento por embedding; 4x menor pra versionar/clonar.
+    dtype: 'q8',
   },
 } as const satisfies Record<string, Partial<LocalEmbeddingOptions>>;
 

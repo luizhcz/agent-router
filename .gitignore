@@ -1,3 +1,6 @@
+# Metadados do macOS
+.DS_Store
+
 # Dependências
 node_modules/
 
@@ -14,9 +17,8 @@ index-*.meta.json
 # Espaço de rascunho / experimentos
 .scratch/
 
-# Pesos de modelos locais (offline) — baixados sob demanda, grandes; não versionar.
-# Rebaixe com: models/<modelo>/onnx/model.onnx a partir do repo Xenova no HF Hub.
-models/
+# Pesos do modelo de embedding (MiniLM) são versionados via Git LFS (ver .gitattributes),
+# para o repo funcionar offline sem baixar do HF Hub. NÃO ignoramos models/.
 
 # Logs
 *.log
