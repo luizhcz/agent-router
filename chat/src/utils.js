@@ -711,11 +711,15 @@ class EnvUtils {
             }
 
             for (let [key, value] of env) {
-                if (key[0] == '#') {
+                // pula linhas em branco / sem '=' (value undefined) e comentários
+                if (value === undefined || key[0] == '#') {
                     continue
                 }
                 key = key.trim()
                 value = value.trim()
+                if (!key) {
+                    continue
+                }
                 process.env[key] = value
             }
         }

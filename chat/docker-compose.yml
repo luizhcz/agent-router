@@ -1,0 +1,36 @@
+# Infra local do trader-chat: Postgres (registro de conversa + tabelas de KPIs) e
+# Redis (cache quente da resolução de conversa). Suba com, na pasta chat/:
+#     docker compose up -d
+# O .env (copie de src/.env.example) já aponta para estas portas (5442 / 6389),
+# escolhidas para não colidir com outros Postgres/Redis que possam já rodar em 5432/6379.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: trader-chat-postgres
+    environment:
+      POSTGRES_USER: chat
+      POSTGRES_PASSWORD: chatpw
+      POSTGRES_DB: chat
+    ports:
+      - "5442:5432"
+    volumes:
+      - trader-chat-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat -d chat"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: trader-chat-redis
+    ports:
+      - "6389:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  trader-chat-pgdata:

@@ -17,6 +17,8 @@ const { PositionService } = require("./mock/position-service")
 const { PortfolioRecommender } = require("./mock/portfolio-recommender")
 const { WriteThroughStore, PgConversationStore, RedisConversationStore, ConversationService } = require("./conversation")
 const { PgClient } = require("./mock/postgres-client")
+const { PostgresClient } = require("./db/postgres")
+const { RedisClient: RealRedisClient } = require("./db/redis")
 const { AuditLog } = require("./audit")
 
 class Application {
@@ -112,16 +114,21 @@ class Application {
             console.error('[Router] indisponível, seguindo sem pré-filtro:', err.message)
         }
 
-        // Registro de conversas (config durável: versão + agentes + dono).
+        // Registro de conversas (config durável: versão + agentes + dono) + KPIs.
         // WRITE-THROUGH: Postgres (fonte da verdade, auditável) + Redis (cache quente).
-        // Ambos são mocks in-memory hoje; trocar por `pg`/Redis reais não muda os stores.
-        const pgConversations = new PgClient()
-        await pgConversations.initialize(env['DB_CONVERSATION_CONNECTION'])
+        // Usa clientes REAIS quando o .env define DB_CONVERSATION_CONNECTION /
+        // REDIS_CONVERSATION_ENDPOINT; senão, cai nos mocks in-memory. Os stores não
+        // mudam — só o cliente injetado.
+        const dbConn = env['DB_CONVERSATION_CONNECTION']
+        const redisUrl = env['REDIS_CONVERSATION_ENDPOINT']
+
+        const pgConversations = dbConn ? new PostgresClient() : new PgClient()
+        await pgConversations.initialize(dbConn)
         const durableStore = new PgConversationStore(pgConversations)
         await durableStore.init() // CREATE TABLE IF NOT EXISTS conversations (...)
 
-        const redisConversations = new RedisClient()
-        await redisConversations.initialize(env['REDIS_CONVERSATION_ENDPOINT'])
+        const redisConversations = redisUrl ? new RealRedisClient() : new RedisClient()
+        await redisConversations.initialize(redisUrl)
         const cacheStore = new RedisConversationStore(redisConversations)
 
         const conversationStore = new WriteThroughStore({ durable: durableStore, cache: cacheStore })
@@ -131,7 +138,7 @@ class Application {
         const conversationService = new ConversationService({ store: conversationStore, availableAgents, defaultVersion })
         EnvUtils.setInstance('conversationService', conversationService)
         EnvUtils.setInstance('conversationPg', pgConversations)
-        console.log(`[Conversation] registro pronto (Postgres+Redis write-through) — agentes: ${availableAgents.join('/')} · versão padrão: ${defaultVersion}`)
+        console.log(`[Conversation] registro pronto (${dbConn ? 'Postgres REAL' : 'pg-mock'} + ${redisUrl ? 'Redis REAL' : 'redis-mock'} write-through) — agentes: ${availableAgents.join('/')} · versão padrão: ${defaultVersion}`)
 
         // Log de auditoria/KPIs (append-only): turns / routing_events / routing_candidates
         // / command_executions / llm_calls. Reusa o mesmo Postgres (mock). O runtime grava
