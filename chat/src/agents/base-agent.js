@@ -53,30 +53,44 @@ class BaseAgent {
             return
         }
 
-        const contextId = this.context.contextId
+        // Fonte da identidade/versão: o REGISTRO da conversa quando presente
+        // (conversa como recurso provisionado); senão, a string contextId
+        // (compatibilidade com o modelo antigo derivado de headers).
+        let mode, account, userProfileId, version
+        const conv = this.context.conversation
+        if (conv) {
+            mode = conv.owner?.mode
+            account = conv.owner?.account
+            userProfileId = conv.owner?.userProfileId
+            version = conv.version
+        } else {
+            const contextId = this.context.contextId
+            if (contextId.startsWith('admin:')) {
+                mode = 'admin'
+                userProfileId = contextId.substring(6).split(':')[0]
+            } else if (contextId.startsWith('digital:')) {
+                mode = 'digital'
+                account = contextId.substring(8).split(':')[0]
+            }
+            const vmatch = contextId.match(/(?:^|:)v=([^:]+)/)
+            if (vmatch) version = vmatch[1]
+        }
 
-        if (contextId.startsWith('admin:')) {
-            const userProfileId = contextId.substring(6).split(':')[0]
+        if (mode === 'admin') {
             const session = await this.accountService.getSessionAdmin(userProfileId)
-
             this.headers = {
                 'app_origin': 'admin',
                 'access_token': session?.accessToken
             }
-
             this.isAdminMode = true
             this.isDigitalMode = false
 
-        } else if (contextId.startsWith('digital:')) {
-
-            const account = contextId.substring(8).split(':')[0]
+        } else if (mode === 'digital') {
             const session = await this.accountService.getSessionDigital(account)
-
             this.headers = {
                 'app_origin': 'digital',
                 'access_token': session?.accessToken
             }
-
             this.isAdminMode = false
             this.isDigitalMode = true
 
@@ -86,9 +100,8 @@ class BaseAgent {
             this.selectedClientName = accountData?.clientName
         }
 
-        const vmatch = contextId.match(/(?:^|:)v=([^:]+)/)
-        if (vmatch && Utils.isValidVersion(vmatch[1])) {
-            this.chatVersion = vmatch[1]
+        if (version && Utils.isValidVersion(version)) {
+            this.chatVersion = version
         }
     }
 

@@ -194,6 +194,12 @@ class HttpServer {
             return
         }
 
+        // Envelope de status explícito: { type:'http', status, body }
+        if (result && typeof result === 'object' && result.type === 'http') {
+            this._sendJson(res, result.status || 200, result.body === undefined ? null : result.body)
+            return
+        }
+
         this._sendJson(res, 200, result)
     }
 

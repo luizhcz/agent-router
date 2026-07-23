@@ -15,6 +15,7 @@ const path = require('path')
 const fs = require('fs')
 const { PositionService } = require("./mock/position-service")
 const { PortfolioRecommender } = require("./mock/portfolio-recommender")
+const { ConversationStore, ConversationService } = require("./conversation")
 
 class Application {
 
@@ -109,6 +110,18 @@ class Application {
             console.error('[Router] indisponível, seguindo sem pré-filtro:', err.message)
         }
 
+        // Registro de conversas (config durável: versão + agentes + dono). Store sobre
+        // Redis (mock hoje). Agentes disponíveis e versão padrão vêm do runtime.
+        const redisConversations = new RedisClient()
+        await redisConversations.initialize(env['REDIS_CONVERSATION_ENDPOINT'])
+        const conversationStore = new ConversationStore(redisConversations)
+        const availableAgents = [...new Set(runtime.commandElements.map(c => c.agent))].filter(a => a && a !== 'system')
+        const promptVersions = runtime._promptVersions || []
+        const defaultVersion = promptVersions[promptVersions.length - 1]
+        const conversationService = new ConversationService({ store: conversationStore, availableAgents, defaultVersion })
+        EnvUtils.setInstance('conversationService', conversationService)
+        console.log(`[Conversation] registro pronto — agentes: ${availableAgents.join('/')} · versão padrão: ${defaultVersion}`)
+
         httpServer.use((req, res, next) => {
             req.ack(30_000)
             next()
@@ -117,6 +130,12 @@ class Application {
         httpServer.on('GET:/trader-chat', this.onRequestGetChatHtml.bind(this))
 
         httpServer.on('api/trader-chat/info', this.onRequestGetInfo.bind(this))
+
+        // Conversa como recurso: create/get/delete. GET e DELETE leem o id do header
+        // `conversation-id` (o http-server casa path exato, sem path params).
+        httpServer.on('POST:/api/trader-chat/conversation', this.onRequestCreateConversation.bind(this))
+        httpServer.on('GET:/api/trader-chat/conversation', this.onRequestGetConversation.bind(this))
+        httpServer.on('DELETE:/api/trader-chat/conversation', this.onRequestDeleteConversation.bind(this))
 
         httpServer.on('POST:/api/trader-chat', this.onRequestPostMessage.bind(this))
         httpServer.on('GET:/api/trader-chat', this.onRequestGetMessage.bind(this))
@@ -157,6 +176,96 @@ class Application {
         return contextId
     }
 
+    /** Identidade autenticada a partir dos headers. Lança 400 se ausente. */
+    _authIdentity(req) {
+        const account = req.headers?.['x-efs-account']
+        const userProfileId = req.headers?.['x-efs-user-profile-id']
+        if (account) return { mode: 'digital', account }
+        if (userProfileId) return { mode: 'admin', userProfileId }
+        const { HttpError } = require('./conversation')
+        throw new HttpError(400, 'identidade ausente: informe x-efs-account ou x-efs-user-profile-id')
+    }
+
+    /** Converte um HttpError (ou erro qualquer) no envelope de status do http-server. */
+    _toHttpError(err) {
+        const status = err && err.httpStatus ? err.httpStatus : 500
+        return { type: 'http', status, body: { error: (err && err.message) || 'internal error' } }
+    }
+
+    /**
+     * Resolve o contexto de um request de chat. Com header `conversation-id`, busca
+     * o registro (com authz do dono) e devolve { contextId, conversationConfig }.
+     * Sem ele, cai no `getContextId` de compatibilidade (conversationConfig null).
+     * Lança HttpError quando o conversation-id é inválido/expirado/sem acesso.
+     */
+    async resolveRequestContext(req) {
+        const conversationId = req.headers?.['conversation-id']
+        if (conversationId) {
+            const svc = EnvUtils.getInstance('conversationService')
+            const record = await svc.resolve(conversationId, this._authIdentity(req))
+            return { contextId: record.id, conversationConfig: record }
+        }
+        const contextId = await this.getContextId(req)
+        return { contextId, conversationConfig: null }
+    }
+
+    async onRequestCreateConversation(req) {
+        try {
+            const svc = EnvUtils.getInstance('conversationService')
+            const owner = this._authIdentity(req)
+            const record = await svc.create({
+                version: req.data?.version,
+                agents: req.data?.agents,
+                owner
+            })
+            return {
+                type: 'http',
+                status: 201,
+                body: {
+                    conversationId: record.id,
+                    version: record.version,
+                    agents: record.agents,
+                    expiresAt: record.expiresAt
+                }
+            }
+        } catch (err) {
+            return this._toHttpError(err)
+        }
+    }
+
+    async onRequestGetConversation(req) {
+        try {
+            const svc = EnvUtils.getInstance('conversationService')
+            const id = req.headers?.['conversation-id'] || req.data?.id
+            const record = await svc.resolve(id, this._authIdentity(req))
+            return {
+                conversationId: record.id,
+                version: record.version,
+                agents: record.agents,
+                owner: record.owner,
+                status: record.status,
+                createdAt: record.createdAt,
+                expiresAt: record.expiresAt
+            }
+        } catch (err) {
+            return this._toHttpError(err)
+        }
+    }
+
+    async onRequestDeleteConversation(req) {
+        try {
+            const svc = EnvUtils.getInstance('conversationService')
+            const runtime = EnvUtils.getInstance('runtime')
+            const id = req.headers?.['conversation-id'] || req.data?.id
+            const record = await svc.resolve(id, this._authIdentity(req))
+            await runtime.reset(record.id)
+            await svc.close(record.id)
+            return { status: 'ok' }
+        } catch (err) {
+            return this._toHttpError(err)
+        }
+    }
+
     onRequestGetChatHtml(req) {
         const file = path.join(__dirname, 'mock', 'chat.html')
         return {
@@ -182,7 +291,11 @@ class Application {
     async onRequestPostMessage(req) {
 
         const runtime = EnvUtils.getInstance('runtime')
-        const contextId = await this.getContextId(req)
+
+        let resolved
+        try { resolved = await this.resolveRequestContext(req) }
+        catch (err) { return this._toHttpError(err) }
+        const { contextId, conversationConfig } = resolved
 
         const commands = req.data.commands
 
@@ -209,6 +322,9 @@ class Application {
             content = content.content
         }
 
+        // Pré-cria o contexto com a config da conversa (aplicada só na criação);
+        // send() reusa o contexto cacheado. No caminho de compat, conversationConfig é null.
+        await runtime.getContext(contextId, true, conversationConfig)
         const msg = await runtime.send(contextId, content, commands)
 
         return msg
@@ -217,9 +333,12 @@ class Application {
     async onRequestGetMessage(req) {
 
         const runtime = EnvUtils.getInstance('runtime')
-        const contextId = await this.getContextId(req)
 
-        let msg = await runtime.receive(contextId, 30_000)
+        let resolved
+        try { resolved = await this.resolveRequestContext(req) }
+        catch (err) { return this._toHttpError(err) }
+
+        let msg = await runtime.receive(resolved.contextId, 30_000)
 
         return msg
     }
@@ -227,9 +346,12 @@ class Application {
     async onRequestDeleteContext(req) {
 
         const runtime = EnvUtils.getInstance('runtime')
-        const contextId = await this.getContextId(req)
 
-        await runtime.reset(contextId)
+        let resolved
+        try { resolved = await this.resolveRequestContext(req) }
+        catch (err) { return this._toHttpError(err) }
+
+        await runtime.reset(resolved.contextId)
 
         return { status: 'ok' }
     }
@@ -237,21 +359,27 @@ class Application {
     async onRequestGetHistory(req) {
 
         const runtime = EnvUtils.getInstance('runtime')
-        const contextId = await this.getContextId(req)
+
+        let resolved
+        try { resolved = await this.resolveRequestContext(req) }
+        catch (err) { return this._toHttpError(err) }
 
         const audit = req.data?.audit === 'true'
         const count = req.data?.count ? parseInt(req.data.count) : undefined
         const role = req.data?.role
 
-        return runtime.getMessages(contextId, { role, count, audit })
+        return runtime.getMessages(resolved.contextId, { role, count, audit })
     }
 
     async onRequestGetData(req) {
 
         const runtime = EnvUtils.getInstance('runtime')
-        const contextId = await this.getContextId(req)
 
-        return runtime.getData(contextId)
+        let resolved
+        try { resolved = await this.resolveRequestContext(req) }
+        catch (err) { return this._toHttpError(err) }
+
+        return runtime.getData(resolved.contextId)
     }
 
     async onRequestGetPortfolioRecommendation(req) {

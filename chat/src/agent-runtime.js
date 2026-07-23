@@ -23,7 +23,7 @@ class AgentRuntime {
         await this.initializePromptElements(AgentClass)
     }
 
-    async getContext(contextId, createIfNull = false) {
+    async getContext(contextId, createIfNull = false, conversationConfig = undefined) {
 
         if (!contextId) {
             return
@@ -40,6 +40,9 @@ class AgentRuntime {
 
             context = {
                 contextId,
+                // Config durável da conversa (versão/agentes/dono) resolvida do
+                // registro, ou null no caminho de compatibilidade (contextId derivado).
+                conversation: conversationConfig || null,
                 state: 'default',
                 commandInterrupt: undefined,
                 pendingCommands: undefined,
@@ -98,6 +101,9 @@ class AgentRuntime {
             ...AgentRuntime.getAgentPromptElements(AgentRuntime, 'system').commands,
             ...sourceCommands,
         ]
+
+        // Mapa método -> agente, para o gate de escopo de agentes por conversa.
+        this.commandAgentByMethod = new Map(this.commandElements.map(c => [c.method, c.agent]))
 
         // índice dos arquivos de prompt versionados em src/prompts/
         this._promptsDir = path.join(__dirname, 'prompts')
@@ -387,6 +393,16 @@ class AgentRuntime {
         return negate ? !agent[key] : !!agent[key]
     }
 
+    // Escopo de agentes por conversa: um comando está no escopo se não há conversa
+    // (compat => todos habilitados), se é do agente 'system' (greetings/notFound,
+    // sempre disponíveis como escape), ou se seu agente está entre os habilitados.
+    static _agentInScope(agentName, context) {
+        const enabled = context?.conversation?.agents
+        if (!enabled || !enabled.length) return true
+        if (agentName === 'system') return true
+        return enabled.includes(agentName)
+    }
+
     static _filterElements(items, agent) {
         if (!items?.length || !agent) return items?.map?.(i => typeof i === 'string' ? i : i.text) ?? items
         return items
@@ -475,6 +491,7 @@ class AgentRuntime {
 
         if (commands) {
             commands = commands.filter(c =>
+                AgentRuntime._agentInScope(c.agent, context) &&
                 AgentRuntime._evalFlag(c.flag, agent) &&
                 (agent.isCommandAvailable?.(c.method) ?? true)
             )
@@ -604,6 +621,7 @@ class AgentRuntime {
 
         if (commands) {
             commands = commands.filter(c =>
+                AgentRuntime._agentInScope(c.agent, context) &&
                 AgentRuntime._evalFlag(c.flag, agent) &&
                 (agent.isCommandAvailable?.(c.method) ?? true)
             )
@@ -747,7 +765,9 @@ class AgentRuntime {
             return undefined
         }
         try {
-            const routed = await router.route(text)
+            // Escopo de agentes da conversa (ou undefined => todos).
+            const agents = context.conversation?.agents
+            const routed = await router.route(text, { agents })
             if (!routed || !routed.methods || routed.methods.length === 0) {
                 return undefined
             }
@@ -974,6 +994,14 @@ class AgentRuntime {
 
         try {
             const { type } = cmd
+
+            // gate de escopo de agente — bloqueia comando de agente fora do escopo da
+            // conversa (defesa em profundidade: cobre comandos injetados via
+            // req.data.commands, que escapam do filtro de prompt e do router).
+            const cmdAgent = this.commandAgentByMethod?.get(type)
+            if (cmdAgent && !AgentRuntime._agentInScope(cmdAgent, context)) {
+                return undefined
+            }
 
             // gate de versão — bloqueia comando indisponível para a versão do chat.
             // cobre comandos injetados via req.data.commands, que escapam do filtro pós-LLM.

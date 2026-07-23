@@ -42,10 +42,15 @@ class ChatIntentRouter {
       localModelPath: MODELS_DIR,
     });
 
+    // Configuramos topK/candidatePool = tamanho do catálogo para que route()
+    // devolva o RANKING COMPLETO; o corte em top-K (e o filtro por agente da
+    // conversa) é aplicado em `route()` abaixo. Sem isso, um chat só-content
+    // pegaria apenas os poucos content que sobrassem no top-8 global.
+    const n = this.catalog.commands.length;
     this.router = await IntentRouter.create({
       catalog: this.catalog,
       embedder,
-      config: { topK: this.topK, abstainThreshold: this.abstainThreshold },
+      config: { topK: n, candidatePool: n, abstainThreshold: this.abstainThreshold },
       cacheDir: CACHE_DIR,
     });
 
@@ -57,19 +62,27 @@ class ChatIntentRouter {
   }
 
   /**
-   * Roteia um enunciado do usuário. Devolve `{ methods, agents, abstained, candidates }`
-   * onde `methods` é a lista (top-K) de nomes de método para filtrar os comandos
-   * que vão à LLM. Se o router não estiver pronto, devolve `null` (o runtime cai
-   * no comportamento sem filtro).
+   * Roteia um enunciado do usuário. `opts.agents` (opcional) restringe ao escopo da
+   * conversa: pontua o ranking completo, filtra aos agentes habilitados (+ 'system'
+   * sempre) e corta em `topK`. Sem `opts.agents`, usa todos os agentes. Devolve
+   * `{ methods, agents, abstained, candidates }`; `methods` é a lista (top-K) de
+   * métodos para filtrar os comandos que vão à LLM. Router não pronto => `null`
+   * (o runtime cai no comportamento sem filtro).
    */
-  async route(text) {
+  async route(text, opts = {}) {
     if (!this.ready || !text) return null;
-    const res = await this.router.route(text);
+    const res = await this.router.route(text); // ranking completo
+    let candidates = res.candidates;
+    if (opts.agents && opts.agents.length) {
+      const allow = new Set([...opts.agents, 'system']);
+      candidates = candidates.filter((c) => allow.has(c.command.agent));
+    }
+    candidates = candidates.slice(0, this.topK); // top-K efetivo do subconjunto
     return {
-      methods: res.candidates.map((c) => c.command.method),
-      agents: [...new Set(res.candidates.map((c) => c.command.agent))],
+      methods: candidates.map((c) => c.command.method),
+      agents: [...new Set(candidates.map((c) => c.command.agent))],
       abstained: res.abstained,
-      candidates: res.candidates.map((c) => ({
+      candidates: candidates.map((c) => ({
         method: c.command.method,
         agent: c.command.agent,
         score: c.score,
