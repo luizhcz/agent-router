@@ -42,8 +42,9 @@ export const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', 
 export const DEFAULT_CACHE_DIR =
   process.env.ROUTER_CACHE_DIR ?? join(PACKAGE_ROOT, '.cache', 'router-index');
 
-/** Raiz das pastas de modelos locais (offline). Contém `<modelo>/onnx/model.onnx`. */
-export const MODELS_DIR = process.env.ROUTER_MODELS_DIR ?? join(PACKAGE_ROOT, 'models');
+/** Raiz das pastas de modelos locais (offline): `chat/models`, onde vive
+ * `<modelo>/onnx/model.onnx` (o modelo é versionado junto do chat, que é autocontido). */
+export const MODELS_DIR = process.env.ROUTER_MODELS_DIR ?? join(PACKAGE_ROOT, 'chat', 'models');
 
 // ---------------------------------------------------------------------------
 // Saída no terminal
@@ -188,7 +189,7 @@ export function parseCommonFlags(argv: string[]): CommonFlags {
 
 /**
  * Opções do provider local. Padrão do projeto: MiniLM multilíngue rodando
- * OFFLINE da pasta `models/paraphrase-multilingual-MiniLM-L12-v2` (simétrico,
+ * OFFLINE da pasta `chat/models/paraphrase-multilingual-MiniLM-L12-v2` (simétrico,
  * 384d, sem prefixos). `ROUTER_MODEL` troca o preset:
  *   - `minilm` (padrão): offline, da pasta local, sem rede.
  *   - `e5`: E5-base assimétrico 768d, baixado do Hub na 1ª vez.

@@ -36,7 +36,7 @@ percorre, **nesta ordem**:
 2. **Embedding** (`src/embeddings/*`). Todos os textos do catálogo são embedados
    pelo lado "documento"; a consulta, pelo lado "query". O modelo padrão é
    `paraphrase-multilingual-MiniLM-L12-v2` (384d), **simétrico** — os dois lados
-   usam o mesmo texto, sem prefixos — rodando 100% offline da pasta `models/`.
+   usam o mesmo texto, sem prefixos — rodando 100% offline da pasta `chat/models/`.
    A abstração suporta também modelos **assimétricos** (família E5, prefixos
    `"query: "`/`"passage: "`), por isso o provider expõe `embedDocuments` e
    `embedQueries` separados em vez de um `embed()` genérico — trocar de modelo é
@@ -135,13 +135,13 @@ menor que o top-K.
 O provider padrão é **local e 100% offline** (`@huggingface/transformers` +
 onnxruntime-node): `paraphrase-multilingual-MiniLM-L12-v2`, **384 dims, fp32,
 pooling `mean`, SIMÉTRICO (sem prefixos)**, carregado de
-`models/paraphrase-multilingual-MiniLM-L12-v2/` (não baixa nada em runtime).
+`chat/models/paraphrase-multilingual-MiniLM-L12-v2/` (não baixa nada em runtime).
 
 Pré-requisito: baixar os pesos ONNX para essa pasta uma vez (o `.onnx` é grande e
 fica fora do git — ver `.gitignore`):
 
 ```bash
-DIR=models/paraphrase-multilingual-MiniLM-L12-v2
+DIR=chat/models/paraphrase-multilingual-MiniLM-L12-v2
 BASE=https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2/resolve/main
 mkdir -p "$DIR/onnx"
 for f in config.json tokenizer.json tokenizer_config.json special_tokens_map.json unigram.json; do
@@ -260,7 +260,7 @@ dois chega a 98.3% em recall@5, mas para recall@8 o MiniLM sozinho já entrega m
 Os números não são versionados como relatório; reproduza com:
 
 ```bash
-npm run index:build   # aquece o cache (offline, da pasta models/)
+npm run index:build   # aquece o cache (offline, da pasta chat/models/)
 npm run eval          # recall@1/3/5/8, MRR, abstenção, quebras, misses
 npm run bench         # latências p50/p95/p99
 ```

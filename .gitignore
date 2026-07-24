@@ -18,7 +18,7 @@ index-*.meta.json
 .scratch/
 
 # Pesos do modelo de embedding (MiniLM) são versionados via Git LFS (ver .gitattributes),
-# para o repo funcionar offline sem baixar do HF Hub. NÃO ignoramos models/.
+# para o repo funcionar offline sem baixar do HF Hub. NÃO ignoramos chat/models/.
 
 # Logs
 *.log

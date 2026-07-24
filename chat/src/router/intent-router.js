@@ -1,5 +1,5 @@
 // ROUTER — ponte CommonJS → pacote ESM `agent-router` (../../../dist), rodando o
-// modelo de embedding MiniLM 100% OFFLINE da pasta ../../../models.
+// modelo de embedding MiniLM 100% OFFLINE da pasta ../../models (chat/models).
 //
 // O chat é CommonJS e o pacote do router é ESM (NodeNext); a ponte é um
 // `import()` dinâmico dentro de um contexto async. O @huggingface/transformers
@@ -11,10 +11,13 @@ const { pathToFileURL } = require('url');
 
 const { buildCatalog } = require('./catalog-builder');
 
-// Raiz do pacote agent-router (dois níveis acima de chat/src/router).
+// Raiz do pacote agent-router (três níveis acima) — usada SÓ p/ localizar o dist ESM.
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 const ROUTER_DIST = path.join(ROOT, 'dist', 'index.js');
-const MODELS_DIR = process.env.ROUTER_MODELS_DIR || path.join(ROOT, 'models');
+// Pasta do chat (dois níveis acima de src/router). O modelo de embedding vive em
+// chat/models/, deixando o chat AUTOCONTIDO — não depende do models/ da raiz do repo.
+const CHAT_ROOT = path.resolve(__dirname, '..', '..');
+const MODELS_DIR = process.env.ROUTER_MODELS_DIR || path.join(CHAT_ROOT, 'models');
 const CACHE_DIR = process.env.ROUTER_CACHE_DIR || path.join(__dirname, '.cache', 'router-index');
 
 /**
