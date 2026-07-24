@@ -1,9 +1,10 @@
-// ROUTER — ponte CommonJS → pacote ESM `agent-router` (../../../dist), rodando o
-// modelo de embedding MiniLM 100% OFFLINE da pasta ../../models (chat/models).
+// ROUTER — ponte CommonJS → biblioteca ESM `agent-router` VENDORIZADA em
+// chat/lib/agent-router, rodando o MiniLM 100% OFFLINE de chat/models. O chat é
+// AUTOCONTIDO: não depende do dist/ nem do node_modules da raiz do repo.
 //
-// O chat é CommonJS e o pacote do router é ESM (NodeNext); a ponte é um
-// `import()` dinâmico dentro de um contexto async. O @huggingface/transformers
-// resolve do node_modules do pacote raiz (o dist vive sob ele).
+// O chat é CommonJS e a lib é ESM; a ponte é um `import()` dinâmico em contexto
+// async. As deps de runtime da lib (@huggingface/transformers, zod) estão
+// declaradas em chat/package.json e resolvem de chat/node_modules.
 
 const path = require('path');
 const crypto = require('crypto');
@@ -11,12 +12,10 @@ const { pathToFileURL } = require('url');
 
 const { buildCatalog } = require('./catalog-builder');
 
-// Raiz do pacote agent-router (três níveis acima) — usada SÓ p/ localizar o dist ESM.
-const ROOT = path.resolve(__dirname, '..', '..', '..');
-const ROUTER_DIST = path.join(ROOT, 'dist', 'index.js');
-// Pasta do chat (dois níveis acima de src/router). O modelo de embedding vive em
-// chat/models/, deixando o chat AUTOCONTIDO — não depende do models/ da raiz do repo.
+// CHAT_ROOT = a pasta chat/ (dois níveis acima de src/router). Tudo resolve daqui
+// pra baixo: a lib vendorizada e o modelo — nada aponta pra raiz do repo.
 const CHAT_ROOT = path.resolve(__dirname, '..', '..');
+const ROUTER_DIST = path.join(CHAT_ROOT, 'lib', 'agent-router', 'index.js');
 const MODELS_DIR = process.env.ROUTER_MODELS_DIR || path.join(CHAT_ROOT, 'models');
 const CACHE_DIR = process.env.ROUTER_CACHE_DIR || path.join(__dirname, '.cache', 'router-index');
 
