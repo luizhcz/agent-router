@@ -5,7 +5,7 @@
  *
  * `maxPerAgent <= 0` é no-op (devolve a lista intacta).
  */
-export function capPerAgent(candidates, maxPerAgent, catalog) {
+function capPerAgent(candidates, maxPerAgent, catalog) {
     if (maxPerAgent <= 0)
         return candidates;
     const agentOf = new Map(catalog.commands.map((c) => [c.id, c.agent]));
@@ -30,7 +30,7 @@ export function capPerAgent(candidates, maxPerAgent, catalog) {
  * vetores do índice. Exportado por completude — o brief manda usar só se o eval
  * pedir; NÃO faz parte do pipeline padrão.
  */
-export function mmr(candidates, lambda, topK, index) {
+function mmr(candidates, lambda, topK, index) {
     if (candidates.length === 0)
         return [];
     const centroids = buildCentroids(index);
@@ -92,4 +92,4 @@ function cosine(centroids, a, b) {
         dot += va[d] * vb[d];
     return dot;
 }
-//# sourceMappingURL=diversify.js.map
+module.exports = { capPerAgent, mmr };

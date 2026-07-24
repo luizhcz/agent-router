@@ -5,7 +5,7 @@ const STOPWORDS = new Set([
     'ao', 'aos', 'se', 'the', 'of', 'to', 'and', 'la', 'el', 'los', 'las', 'del', 'y',
 ]);
 function stripAccents(s) {
-    return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return s.normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 function wordTokens(text) {
     return stripAccents(text.toLowerCase())
@@ -82,7 +82,7 @@ class BM25 {
  * persistido). Campo de palavras: nome + utterances (com stopwords filtradas) +
  * keywords (duplicadas, sem filtro). Campo char: nome + utterances + keywords.
  */
-export function buildLexicalIndex(catalog) {
+function buildLexicalIndex(catalog) {
     const ids = catalog.commands.map((c) => c.id);
     const wordDocs = [];
     const charDocs = [];
@@ -115,4 +115,4 @@ export function buildLexicalIndex(catalog) {
         },
     };
 }
-//# sourceMappingURL=lexical.js.map
+module.exports = { buildLexicalIndex };

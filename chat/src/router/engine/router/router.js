@@ -11,16 +11,16 @@
  * Invariante crítica: mesmo com `abstained === true`, os candidatos são SEMPRE
  * devolvidos — abstenção é um sinal para a LLM, não motivo para esconder recall.
  */
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { resolveConfig } from './config.js';
-import { capPerAgent } from './diversify.js';
-import { minMaxNormalize, reciprocalRankFusion, weightedFusion } from './fusion.js';
-import { buildLexicalIndex } from './lexical.js';
+const { createHash } = require('node:crypto');
+const { mkdir, readFile, writeFile } = require('node:fs/promises');
+const { join } = require('node:path');
+const { resolveConfig } = require('./config.js');
+const { capPerAgent } = require('./diversify.js');
+const { minMaxNormalize, reciprocalRankFusion, weightedFusion } = require('./fusion.js');
+const { buildLexicalIndex } = require('./lexical.js');
 /** Versão da lógica de construção de documentos; entra no fingerprint do índice. */
 const INDEX_VERSION = 1;
-export class IntentRouter {
+class IntentRouter {
     embedder;
     reranker;
     config;
@@ -349,4 +349,4 @@ async function loadIndex(cacheDir, catalog, providerId, expectedFingerprint) {
         return null; // cache ausente/ilegível → reconstrói
     }
 }
-//# sourceMappingURL=router.js.map
+module.exports = { IntentRouter };

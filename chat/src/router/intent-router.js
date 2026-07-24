@@ -1,21 +1,18 @@
-// ROUTER — ponte CommonJS → biblioteca ESM `agent-router` VENDORIZADA em
-// chat/lib/agent-router, rodando o MiniLM 100% OFFLINE de chat/models. O chat é
-// AUTOCONTIDO: não depende do dist/ nem do node_modules da raiz do repo.
-//
-// O chat é CommonJS e a lib é ESM; a ponte é um `import()` dinâmico em contexto
-// async. As deps de runtime da lib (@huggingface/transformers, zod) estão
-// declaradas em chat/package.json e resolvem de chat/node_modules.
+// ROUTER — adaptador do motor de intenções ao runtime do chat. O motor vive
+// INTEGRADO em ./engine (CommonJS, dobrado pra dentro do projeto), rodando o
+// MiniLM 100% OFFLINE de chat/models. O chat é AUTOCONTIDO: não depende do dist/
+// nem do node_modules da raiz do repo — só require() local + as deps de runtime
+// (@huggingface/transformers, zod) declaradas em chat/package.json.
 
 const path = require('path');
 const crypto = require('crypto');
-const { pathToFileURL } = require('url');
 
 const { buildCatalog } = require('./catalog-builder');
+const { IntentRouter, createEmbeddingProvider, MODEL_PRESETS } = require('./engine');
 
-// CHAT_ROOT = a pasta chat/ (dois níveis acima de src/router). Tudo resolve daqui
-// pra baixo: a lib vendorizada e o modelo — nada aponta pra raiz do repo.
+// CHAT_ROOT = a pasta chat/ (dois níveis acima de src/router). O modelo vive em
+// chat/models; o motor de intenções em ./engine — nada aponta pra raiz do repo.
 const CHAT_ROOT = path.resolve(__dirname, '..', '..');
-const ROUTER_DIST = path.join(CHAT_ROOT, 'lib', 'agent-router', 'index.js');
 const MODELS_DIR = process.env.ROUTER_MODELS_DIR || path.join(CHAT_ROOT, 'models');
 const CACHE_DIR = process.env.ROUTER_CACHE_DIR || path.join(__dirname, '.cache', 'router-index');
 
@@ -32,9 +29,6 @@ class ChatIntentRouter {
   }
 
   async initialize(commandElements) {
-    const mod = await import(pathToFileURL(ROUTER_DIST).href);
-    const { IntentRouter, createEmbeddingProvider, MODEL_PRESETS } = mod;
-
     this.catalog = buildCatalog(commandElements);
 
     // Identificadores para atribuição de KPIs (routing_events): modelo + fingerprint
@@ -111,4 +105,4 @@ class ChatIntentRouter {
   }
 }
 
-module.exports = { ChatIntentRouter, MODELS_DIR, ROUTER_DIST };
+module.exports = { ChatIntentRouter, MODELS_DIR };

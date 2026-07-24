@@ -5,7 +5,7 @@
  * recall sem quebrar nada visivelmente (ex.: `candidatePool < topK`, do qual o
  * cross-encoder nunca teria de onde resgatar o alvo).
  */
-import { z } from 'zod';
+const { z } = require('zod');
 /**
  * Valores-padrão concretos (Brief §8). Todos os campos preenchidos:
  * - topK 8: entregar 8 comandos à LLM (não 5). Medido: com MiniLM, recall@5=97.5%
@@ -19,10 +19,9 @@ import { z } from 'zod';
  *   (RouterOptions.reranker), mas nenhum é injetado por padrão.
  * - maxPerAgent 0: diversificação prejudica recall sob gold único.
  * - abstainThreshold 0.72: default da lib (escala do E5). É ESPECÍFICO DO MODELO —
- *   o CLI (shared.ts `resolveModelChoice`) injeta o calibrado por modelo (MiniLM
- *   ~0.58). Ao instanciar o router direto com outro modelo, recalibre este valor.
+ *   ao instanciar o router com outro modelo, recalibre este valor (MiniLM ~0.58).
  */
-export const DEFAULT_CONFIG = {
+const DEFAULT_CONFIG = {
     topK: 8,
     candidatePool: 20,
     fusion: { kind: 'rrf', k: 60 },
@@ -78,7 +77,7 @@ const configSchema = z
  *
  * @throws {Error} com mensagem clara quando a combinação é incoerente.
  */
-export function resolveConfig(partial, base = DEFAULT_CONFIG) {
+function resolveConfig(partial, base = DEFAULT_CONFIG) {
     const merged = {
         topK: partial?.topK ?? base.topK,
         candidatePool: partial?.candidatePool ?? base.candidatePool,
@@ -97,4 +96,4 @@ export function resolveConfig(partial, base = DEFAULT_CONFIG) {
     }
     return parsed.data;
 }
-//# sourceMappingURL=config.js.map
+module.exports = { DEFAULT_CONFIG, resolveConfig };

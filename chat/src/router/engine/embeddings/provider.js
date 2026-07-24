@@ -1,28 +1,25 @@
-import { createLocalProvider } from './local.js';
 /**
  * Fábrica de providers de embedding. Neste snapshot só existe o provider LOCAL
  * (MiniLM offline) — os providers HTTP (openai/cohere) foram removidos por não
  * serem usados pelo chat. O carregamento do modelo acontece em createLocalProvider.
+ *
+ * NOTA (CommonJS): `local.js` importa os helpers de álgebra DAQUI e a fábrica
+ * precisa de `createLocalProvider` de lá — um ciclo. Em CJS, o require de
+ * `./local.js` é LAZY (dentro do switch, em tempo de chamada), então provider.js
+ * termina de carregar antes de local.js pedir `l2Normalize`/`chunk`.
  */
-export async function createEmbeddingProvider(opts) {
+async function createEmbeddingProvider(opts) {
     switch (opts.kind) {
         case 'local':
-            return createLocalProvider(opts);
+            return require('./local.js').createLocalProvider(opts);
         default: {
-            // Exaustividade: se um novo `kind` entrar em EmbeddingOptions e não for
-            // tratado, isto vira erro de compilação.
             const never = opts;
             throw new Error(`kind de embedding desconhecido: ${JSON.stringify(never)}`);
         }
     }
 }
 // ---------------------------------------------------------------------------
-// Helpers de álgebra compartilhados (usados por todos os providers)
-//
-// São `function` declarations (hoisted) de propósito: local.ts/openai.ts/
-// cohere.ts importam daqui e provider.ts importa deles, formando um ciclo de
-// módulos. Com funções hoisted o binding já existe durante a avaliação
-// circular, então o ciclo é seguro (nenhuma chamada acontece em top-level).
+// Helpers de álgebra compartilhados (usados pelo provider local)
 // ---------------------------------------------------------------------------
 /**
  * Normaliza L2 (retorna cópia nova; não muta a entrada). Vetores de norma zero
@@ -30,7 +27,7 @@ export async function createEmbeddingProvider(opts) {
  * de um provider passa por aqui — é o ponto único que garante o invariante de
  * que cosseno == produto escalar no resto do sistema.
  */
-export function l2Normalize(v) {
+function l2Normalize(v) {
     let sum = 0;
     for (let i = 0; i < v.length; i++) {
         const x = v[i];
@@ -53,7 +50,7 @@ export function l2Normalize(v) {
  * isto é a similaridade de cosseno. `offsetA`/`offsetB`/`len` permitem operar
  * sobre fatias de uma matriz densa achatada sem copiar.
  */
-export function dotProduct(a, b, offsetA = 0, offsetB = 0, len) {
+function dotProduct(a, b, offsetA = 0, offsetB = 0, len) {
     const n = len ?? Math.min(a.length - offsetA, b.length - offsetB);
     let sum = 0;
     for (let i = 0; i < n; i++) {
@@ -61,11 +58,8 @@ export function dotProduct(a, b, offsetA = 0, offsetB = 0, len) {
     }
     return sum;
 }
-// (helpers HTTP fetchJsonWithRetry/backoffDelay/parseRetryAfter/safeText/sleep
-//  removidos: só eram usados pelos providers openai/cohere, que saíram do snapshot.)
-/** Divide `items` em blocos de no máximo `size`. Usado para respeitar o limite
- *  de itens por requisição das APIs HTTP e para batching local. */
-export function chunk(items, size) {
+/** Divide `items` em blocos de no máximo `size`. Usado para batching local. */
+function chunk(items, size) {
     if (size <= 0)
         throw new Error(`chunk: tamanho de bloco inválido: ${size}`);
     const out = [];
@@ -74,4 +68,4 @@ export function chunk(items, size) {
     }
     return out;
 }
-//# sourceMappingURL=provider.js.map
+module.exports = { createEmbeddingProvider, l2Normalize, dotProduct, chunk };

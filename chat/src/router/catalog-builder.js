@@ -1,8 +1,8 @@
 // ROUTER — constrói o catálogo do IntentRouter a partir dos comandos do runtime.
 //
 // O AgentRuntime já extrai, por reflexão, cada comando com { method, agent, notes,
-// examples, inputs }. Aqui convertemos isso no shape que a lib agent-router
-// vendorizada (chat/lib/agent-router) espera em `Catalog`. As utterances (kNN)
+// examples, inputs }. Aqui convertemos isso no shape que o motor de intenções
+// integrado (chat/src/router/engine) espera em `Catalog`. As utterances (kNN)
 // vêm de DUAS fontes, fundidas:
 //   1) os `@example` do comentário do comando — que TAMBÉM vão no prompt da LLM;
 //   2) um SIDECAR por-agente em `utterances/<agente>.json` (chaveado por método) —

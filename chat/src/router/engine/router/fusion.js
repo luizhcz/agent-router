@@ -15,7 +15,7 @@
  *
  * Itens ausentes de uma lista simplesmente não recebem contribuição dela.
  */
-export function reciprocalRankFusion(lists, k) {
+function reciprocalRankFusion(lists, k) {
     const agg = new Map();
     for (const list of lists) {
         for (const [i, item] of list.entries()) {
@@ -34,7 +34,7 @@ export function reciprocalRankFusion(lists, k) {
  * quando houver dados rotulados para migrar de RRF para cá, clipar percentil
  * (p1/p99) ou usar z-score antes desta chamada.
  */
-export function weightedFusion(lists, weights) {
+function weightedFusion(lists, weights) {
     const agg = new Map();
     for (const [li, list] of lists.entries()) {
         const w = weights[li] ?? 0;
@@ -54,7 +54,7 @@ export function weightedFusion(lists, weights) {
  * para todos, nunca `NaN`. Interpretação: sem sinal de ordenação dentro da
  * lista, todos os itens são igualmente (máximo) relevantes por ela.
  */
-export function minMaxNormalize(values) {
+function minMaxNormalize(values) {
     if (values.length === 0)
         return [];
     let min = Infinity;
@@ -75,4 +75,4 @@ function toSorted(agg) {
         .map(([commandId, score]) => ({ commandId, score }))
         .sort((a, b) => b.score - a.score);
 }
-//# sourceMappingURL=fusion.js.map
+module.exports = { reciprocalRankFusion, weightedFusion, minMaxNormalize };

@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
-import { isAbsolute, resolve } from 'node:path';
-import { pipeline, env } from '@huggingface/transformers';
-import { l2Normalize, chunk } from './provider.js';
+const { createHash } = require('node:crypto');
+const { isAbsolute, resolve } = require('node:path');
+const { pipeline, env } = require('@huggingface/transformers');
+const { l2Normalize, chunk } = require('./provider.js');
 const DEFAULTS = {
     model: 'Xenova/multilingual-e5-base',
     dtype: 'fp32',
@@ -21,7 +21,7 @@ const DEFAULTS = {
  * Presets de modelo com a REPRESENTAÇÃO correta de cada um já fixada. Espalhe
  * um preset sobre `{ kind: 'local' }` para não errar dims/pooling/simetria.
  */
-export const MODEL_PRESETS = {
+const MODEL_PRESETS = {
     /** E5-base multilíngue: assimétrico, 768d, prefixos `query:`/`passage:`. */
     e5: {
         model: 'Xenova/multilingual-e5-base',
@@ -48,7 +48,7 @@ export const MODEL_PRESETS = {
         dtype: 'q8',
     },
 };
-export async function createLocalProvider(opts) {
+async function createLocalProvider(opts) {
     const model = opts.model ?? DEFAULTS.model;
     const dtype = opts.dtype ?? DEFAULTS.dtype;
     const dimensions = opts.dimensions ?? DEFAULTS.dimensions;
@@ -69,7 +69,7 @@ export async function createLocalProvider(opts) {
             ? opts.localModelPath
             : resolve(process.cwd(), opts.localModelPath)
         : undefined;
-    // O id estável entra na chave de cache do índice (fingerprint em router.ts).
+    // O id estável entra na chave de cache do índice (fingerprint em router.js).
     // Ele PRECISA cobrir tudo que muda a REPRESENTAÇÃO dos vetores — não só
     // model/dtype/dimensions, mas também pooling e os prefixos query/document
     // (asymmetric decide qual prefixo o lado documento usa). Sem isso, trocar
@@ -174,4 +174,4 @@ function truncateChars(text, maxTokens) {
     const cap = maxTokens * 6;
     return text.length > cap ? text.slice(0, cap) : text;
 }
-//# sourceMappingURL=local.js.map
+module.exports = { MODEL_PRESETS, createLocalProvider };
