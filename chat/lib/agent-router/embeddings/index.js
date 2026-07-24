@@ -7,10 +7,6 @@
  */
 // Fábrica + helpers de álgebra e o tipo de opções unificado.
 export { createEmbeddingProvider, l2Normalize, dotProduct, } from './provider.js';
-// Providers concretos (úteis para instanciar direto, sem a fábrica).
+// Provider concreto local (MiniLM) + presets de modelo. Os providers HTTP
+// (openai/cohere) e o EmbeddingCache foram removidos do snapshot do chat.
 export { createLocalProvider, MODEL_PRESETS } from './local.js';
-export { createOpenAIProvider } from './openai.js';
-export { createCohereProvider } from './cohere.js';
-// Cache persistente em disco.
-export { EmbeddingCache } from './cache.js';
-//# sourceMappingURL=index.js.map

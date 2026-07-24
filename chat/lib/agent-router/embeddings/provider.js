@@ -1,19 +1,13 @@
 import { createLocalProvider } from './local.js';
-import { createOpenAIProvider } from './openai.js';
-import { createCohereProvider } from './cohere.js';
 /**
- * Fábrica única de providers de embedding. Não faz trabalho pesado: só resolve
- * a variante e delega. O carregamento do modelo (local) ou a validação de chave
- * (HTTP) acontece dentro de cada `create*`.
+ * Fábrica de providers de embedding. Neste snapshot só existe o provider LOCAL
+ * (MiniLM offline) — os providers HTTP (openai/cohere) foram removidos por não
+ * serem usados pelo chat. O carregamento do modelo acontece em createLocalProvider.
  */
 export async function createEmbeddingProvider(opts) {
     switch (opts.kind) {
         case 'local':
             return createLocalProvider(opts);
-        case 'openai':
-            return createOpenAIProvider(opts);
-        case 'cohere':
-            return createCohereProvider(opts);
         default: {
             // Exaustividade: se um novo `kind` entrar em EmbeddingOptions e não for
             // tratado, isto vira erro de compilação.
@@ -67,74 +61,8 @@ export function dotProduct(a, b, offsetA = 0, offsetB = 0, len) {
     }
     return sum;
 }
-/**
- * POST JSON com retry exponencial + jitter. Reenfileira em 429 e 5xx,
- * respeitando `Retry-After` quando presente. 4xx (exceto 429) falha na hora
- * com o corpo da resposta na mensagem — normalmente é chave inválida ou payload
- * malformado, coisas que retry não conserta.
- */
-export async function fetchJsonWithRetry(url, init, opts) {
-    const baseDelayMs = opts.baseDelayMs ?? 500;
-    const maxDelayMs = opts.maxDelayMs ?? 20_000;
-    let lastErr;
-    for (let attempt = 0; attempt < opts.maxRetries; attempt++) {
-        let res;
-        try {
-            res = await fetch(url, init);
-        }
-        catch (err) {
-            // Erro de rede/DNS/timeout — retriable.
-            lastErr = err;
-            if (attempt < opts.maxRetries - 1) {
-                await sleep(backoffDelay(attempt, baseDelayMs, maxDelayMs));
-                continue;
-            }
-            break;
-        }
-        if (res.ok) {
-            return (await res.json());
-        }
-        const retriable = res.status === 429 || (res.status >= 500 && res.status < 600);
-        const body = await safeText(res);
-        lastErr = new Error(`${opts.providerLabel}: HTTP ${res.status} ${res.statusText}${body ? ` — ${body}` : ''}`);
-        if (!retriable || attempt === opts.maxRetries - 1) {
-            throw lastErr;
-        }
-        const retryAfter = parseRetryAfter(res.headers.get('retry-after'));
-        await sleep(retryAfter ?? backoffDelay(attempt, baseDelayMs, maxDelayMs));
-    }
-    throw lastErr instanceof Error
-        ? lastErr
-        : new Error(`${opts.providerLabel}: falhou após ${opts.maxRetries} tentativas`);
-}
-function backoffDelay(attempt, base, max) {
-    const exp = Math.min(max, base * 2 ** attempt);
-    // Full jitter.
-    return Math.floor(Math.random() * exp);
-}
-function parseRetryAfter(header) {
-    if (!header)
-        return null;
-    const secs = Number(header);
-    if (Number.isFinite(secs))
-        return Math.max(0, secs * 1000);
-    const dateMs = Date.parse(header);
-    if (Number.isFinite(dateMs))
-        return Math.max(0, dateMs - Date.now());
-    return null;
-}
-async function safeText(res) {
-    try {
-        const t = await res.text();
-        return t.length > 500 ? `${t.slice(0, 500)}…` : t;
-    }
-    catch {
-        return '';
-    }
-}
-function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// (helpers HTTP fetchJsonWithRetry/backoffDelay/parseRetryAfter/safeText/sleep
+//  removidos: só eram usados pelos providers openai/cohere, que saíram do snapshot.)
 /** Divide `items` em blocos de no máximo `size`. Usado para respeitar o limite
  *  de itens por requisição das APIs HTTP e para batching local. */
 export function chunk(items, size) {
