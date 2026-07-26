@@ -17,12 +17,20 @@ class LlmService {
 
         const modeLower = String(mode || '').toLowerCase()
 
-        if (modeLower === 'json') {
-            return this._routeJson(prompt)
+        const result = modeLower === 'json'
+            ? this._routeJson(prompt)
+            : this._composeText(prompt)   // modo 'text' (ou qualquer outro): resposta livre em pt-BR
+
+        // usage SIMULADO — a LLM real reporta isto no `usage` da resposta. O runtime
+        // lê `lastUsage` após cada execute e grava em llm_calls (model + tokens) para
+        // as métricas de CUSTO. Tokens ~ chars/4; modelo por modo (json barato, text caro).
+        this.lastUsage = {
+            model: modeLower === 'json' ? 'gpt-5.4-mini' : 'gpt-5.4',
+            inputTokens: Math.max(1, Math.round(String(prompt).length / 4)),
+            outputTokens: Math.max(1, Math.round(JSON.stringify(result).length / 4)),
         }
 
-        // modo 'text' (ou qualquer outro): resposta livre em pt-BR
-        return this._composeText(prompt)
+        return result
     }
 
     // --- extração do input do usuário a partir do bloco # CHAT_INPUT ---

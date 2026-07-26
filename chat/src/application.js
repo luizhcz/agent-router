@@ -19,7 +19,8 @@ const { WriteThroughStore, PgConversationStore, RedisConversationStore, Conversa
 const { PgClient } = require("./mock/postgres-client")
 const { PostgresClient } = require("./db/postgres")
 const { RedisClient: RealRedisClient } = require("./db/redis")
-const { AuditLog } = require("./audit")
+const { AuditLog, OrderEventLog } = require("./audit")
+const { MetricsService } = require("./metrics/metrics-service")
 
 class Application {
 
@@ -100,9 +101,8 @@ class Application {
         await runtime.initialize('trader-agent')
         EnvUtils.setInstance('runtime', runtime)
 
-        // (Sem roteador de intenções: agente único trader — todos os comandos vão
-        // ao prompt da LLM. routeCandidateCommands do runtime devolve undefined sem
-        // o 'intentRouter' no EnvUtils, mantendo o comportamento original.)
+        // (Sem roteador de intenções: agente único trader — todos os comandos do
+        // agente vão ao prompt da LLM, sem pré-filtro.)
 
         // Registro de conversas (config durável: versão + agentes + dono) + KPIs.
         // WRITE-THROUGH: Postgres (fonte da verdade, auditável) + Redis (cache quente).
@@ -131,12 +131,25 @@ class Application {
         EnvUtils.setInstance('conversationPg', pgConversations)
         console.log(`[Conversation] registro pronto (${dbConn ? 'Postgres REAL' : 'pg-mock'} + ${redisUrl ? 'Redis REAL' : 'redis-mock'} write-through) — agentes: ${availableAgents.join('/')} · versão padrão: ${defaultVersion}`)
 
-        // Log de auditoria/KPIs (append-only): turns / routing_events / routing_candidates
-        // / command_executions / llm_calls. Reusa o mesmo Postgres. O runtime grava
-        // 1 turno por mensagem, best-effort (nunca quebra o chat). Tabelas: chat/schema.sql.
+        // Log de auditoria/KPIs (append-only): turns / command_executions / llm_calls.
+        // Reusa o mesmo Postgres. O runtime grava 1 turno por mensagem, best-effort
+        // (nunca quebra o chat). Tabelas: chat/schema.sql. (Sem router: nada de routing_*.)
         const auditLog = new AuditLog(pgConversations)
         EnvUtils.setInstance('auditLog', auditLog)
-        console.log(`[Audit] log de KPIs pronto (turns/routing/command_executions/llm_calls)`)
+        console.log(`[Audit] log de KPIs pronto (turns/command_executions/llm_calls)`)
+
+        // Eventos de ORDEM (externos): ORDER_SENT / ORDER_CANCELED chegam do backend
+        // de ordens por POST /api/trader-chat/event e vão para order_events — a fonte
+        // da verdade dos KPIs de execução. Reusa o mesmo Postgres. Best-effort.
+        const orderEventLog = new OrderEventLog(pgConversations)
+        EnvUtils.setInstance('orderEventLog', orderEventLog)
+        console.log(`[OrderEvents] captura pronta (order_events: ORDER_SENT/ORDER_CANCELED)`)
+
+        // Métricas/KPIs sobre o Postgres (frio): 37 KPIs validados + auditoria de conversa.
+        // Queries analíticas -> exigem o Postgres REAL (degradam best-effort no mock). Só-leitura.
+        const metricsService = new MetricsService(pgConversations)
+        EnvUtils.setInstance('metricsService', metricsService)
+        console.log(`[Metrics] painel de KPIs pronto (${require('./metrics/catalog').CATALOG.kpis.length} KPIs · GET /api/trader-chat/metrics)`)
 
         httpServer.use((req, res, next) => {
             req.ack(30_000)
@@ -158,6 +171,15 @@ class Application {
         httpServer.on('DELETE:/api/trader-chat', this.onRequestDeleteContext.bind(this))
         httpServer.on('GET:/api/trader-chat/history', this.onRequestGetHistory.bind(this))
         httpServer.on('GET:/api/trader-chat/data', this.onRequestGetData.bind(this))
+
+        // Evento EXTERNO de execução (ordem enviada/cancelada) — do backend de ordens.
+        httpServer.on('POST:/api/trader-chat/event', this.onRequestPostOrderEvent.bind(this))
+
+        // Painel de KPIs (aba Métricas do chat.html): tudo GET, só-leitura do Postgres.
+        httpServer.on('GET:/api/trader-chat/metrics', this.onRequestGetMetrics.bind(this))
+        httpServer.on('GET:/api/trader-chat/metrics/conversations', this.onRequestGetMetricsConversations.bind(this))
+        httpServer.on('GET:/api/trader-chat/metrics/conversation', this.onRequestGetMetricsConversation.bind(this))
+        httpServer.on('GET:/api/trader-chat/metrics/conversation/export', this.onRequestGetMetricsConversationExport.bind(this))
 
         httpServer.on('GET:/api/trader-chat/portfolio-recommendation', this.onRequestGetPortfolioRecommendation.bind(this))
         httpServer.on('GET:/api/trader-chat/portfolio-analysis', this.onRequestGetPortfolioAnalysis.bind(this))
@@ -282,7 +304,82 @@ class Application {
         }
     }
 
+    /**
+     * Recebe um evento EXTERNO de execução de ordem (do backend de ordens):
+     * ORDER_SENT / ORDER_CANCELED. Grava em `order_events` (KPIs de execução) e
+     * dispara o `sendEvent` do agente (invalidação do cache de ordens) nos contextos
+     * ativos da conta — fire-and-forget (onEventOrderSent tem sleep de 5s). Best-effort.
+     * Payload (JSON): { eventType, account, orderId?, symbol?, side?, quantity?, price?,
+     * reason? (só ORDER_CANCELED), conversationId?, contextId?, timestamp? }.
+     */
+    async onRequestPostOrderEvent(req) {
+        try {
+            const d = req.data || {}
+            const eventType = String(d.eventType || '').toUpperCase()
+            if (eventType !== 'ORDER_SENT' && eventType !== 'ORDER_CANCELED') {
+                return { type: 'http', status: 400, body: { error: 'eventType inválido: use ORDER_SENT ou ORDER_CANCELED' } }
+            }
+            if (!d.account) {
+                return { type: 'http', status: 400, body: { error: 'account é obrigatório' } }
+            }
+
+            const orderEventLog = EnvUtils.getInstance('orderEventLog')
+            const id = await orderEventLog.record({
+                eventType,
+                account: d.account,
+                orderId: d.orderId,
+                symbol: d.symbol,
+                side: d.side,
+                quantity: d.quantity,
+                price: d.price,
+                reason: eventType === 'ORDER_CANCELED' ? (d.reason ?? null) : null, // motivo só faz sentido no cancelamento
+                conversationId: d.conversationId,
+                contextId: d.contextId,
+                timestamp: d.timestamp,
+            })
+
+            // Invalidação de cache de ordens nos contextos ativos da conta (comportamento
+            // original do sendEvent), fire-and-forget para não bloquear na resposta.
+            const runtime = EnvUtils.getInstance('runtime')
+            runtime.dispatchAccountEvent?.(d.account, eventType)
+
+            return { type: 'http', status: 201, body: { status: 'ok', id, eventType, account: d.account } }
+        } catch (err) {
+            return this._toHttpError(err)
+        }
+    }
+
+    /** Painel de KPIs: roda os 37 KPIs do catálogo e devolve os valores computados. */
+    async onRequestGetMetrics(req) {
+        try { return await EnvUtils.getInstance('metricsService').all(req.data?.period) }
+        catch (err) { return this._toHttpError(err) }
+    }
+
+    /** Lista de conversas para o seletor de auditoria. */
+    async onRequestGetMetricsConversations(req) {
+        try { return await EnvUtils.getInstance('metricsService').listConversations() }
+        catch (err) { return this._toHttpError(err) }
+    }
+
+    /** Reconstrói UMA conversa por inteiro para auditoria. id via ?id= ou header conversation-id. */
+    async onRequestGetMetricsConversation(req) {
+        try {
+            const id = req.data?.id || req.headers?.['conversation-id']
+            return await EnvUtils.getInstance('metricsService').reconstructConversation(id)
+        } catch (err) { return this._toHttpError(err) }
+    }
+
+    /** Exporta UMA conversa em formato pronto para LLM-as-a-judge. id via ?id= ou header. */
+    async onRequestGetMetricsConversationExport(req) {
+        try {
+            const id = req.data?.id || req.headers?.['conversation-id']
+            return await EnvUtils.getInstance('metricsService').exportForJudge(id)
+        } catch (err) { return this._toHttpError(err) }
+    }
+
     onRequestGetChatHtml(req) {
+        // chat.html = o front REAL de produção (2 chats lado a lado) já com as abas
+        // Conversas + Métricas integradas. chat-true.html é a variante anterior.
         const file = path.join(__dirname, 'mock', 'chat.html')
         return {
             type: 'file',

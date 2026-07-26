@@ -89,6 +89,24 @@ class AgentRuntime {
         }, 1500)
     }
 
+    /**
+     * Dispara um evento EXTERNO de execução de ordem (ORDER_SENT/ORDER_CANCELED) nos
+     * contextos ativos de uma conta: chama o `sendEvent` do agente (invalida o cache
+     * de ordens). FIRE-AND-FORGET — onEventOrderSent tem sleep de 5s, então não pode
+     * bloquear o chamador. Best-effort; nunca lança.
+     */
+    dispatchAccountEvent(account, eventType) {
+        if (!account) return
+        for (const context of Object.values(this.contexts)) {
+            try {
+                const acc = context.agent?.selectedAccount || context.conversation?.owner?.account
+                if (acc === account && typeof context.agent?.sendEvent === 'function') {
+                    Promise.resolve(context.agent.sendEvent({ eventType })).catch(() => {})
+                }
+            } catch { /* eventos externos nunca quebram o runtime */ }
+        }
+    }
+
     async initializePromptElements(AgentClass) {
 
         // commands montados 1x por reflexão (runtime primeiro), cada um tagueado com seu agente
@@ -753,47 +771,6 @@ class AgentRuntime {
     }
 
     /**
-     * Pré-filtra os comandos candidatos pelo router de intenções (embeddings MiniLM
-     * offline). Devolve um mapa { method: true } com o top-K + os comandos de
-     * sistema (greetings/notFound) sempre presentes como escape. Sem router
-     * disponível (EnvUtils 'intentRouter'), devolve undefined → getPromptIn mantém
-     * todos os comandos (comportamento original, não-quebrável).
-     */
-    async routeCandidateCommands(text, context) {
-        const router = EnvUtils.getInstance('intentRouter')
-        if (!router || !router.ready) {
-            return undefined
-        }
-        try {
-            // Escopo de agentes da conversa (ou undefined => todos).
-            const agents = context.conversation?.agents
-            const routed = await router.route(text, { agents })
-            if (!routed || !routed.methods || routed.methods.length === 0) {
-                return undefined
-            }
-            const filter = {}
-            for (const m of routed.methods) {
-                filter[m] = true
-            }
-            filter['greetings'] = true
-            filter['notFound'] = true
-            context.lastRoute = {
-                methods: routed.methods,
-                agents: routed.agents,
-                abstained: routed.abstained,
-                candidates: routed.candidates,   // {method, agent, score} — p/ routing_candidates
-                modelId: routed.modelId,
-                fingerprint: routed.fingerprint,
-                latencyMs: routed.timings?.totalMs,
-            }
-            return filter
-        } catch (err) {
-            console.error('[Router] falha ao rotear, usando todos os comandos:', err.message)
-            return undefined
-        }
-    }
-
-    /**
      * Emite o turno para o log de auditoria/KPIs (EnvUtils 'auditLog'), best-effort.
      * Chamado DEPOIS de responder ao usuário; nunca quebra o chat. Sem auditLog, no-op.
      */
@@ -813,7 +790,6 @@ class AgentRuntime {
                 nextState: msg?.stateNext,
                 interrupt: msg?.interrupt,
                 results: msg?.results,
-                routing: context.lastRoute,
                 commandAgentByMethod: this.commandAgentByMethod,
                 outputCardType: context.agent?.outputCard?.type || null,
                 llmCalls,
@@ -832,8 +808,6 @@ class AgentRuntime {
 
         try {
 
-            context.lastRoute = undefined // roteamento é por-turno; evita atribuir o do turno anterior
-
             const msg = context.messages[context.messages.length - 1]
             const msgContent = msg.content
             if (msgContent == 'reset') {
@@ -845,19 +819,16 @@ class AgentRuntime {
 
             await context.agent?.onBeforeProcessMessage?.()
 
-            // Pré-filtro de intenção pelo router de embeddings (substitui o antigo
-            // getPromptPre em duas passadas de LLM): reduz os ~48 comandos tagueados a
-            // um top-K enxuto ANTES da LLM. Sem router disponível, filterCommands fica
-            // undefined e getPromptIn usa todos os comandos (comportamento original).
+            // Agente único (sem router): todos os comandos do agente vão ao prompt da
+            // LLM (getPromptIn sem filtro). O antigo pré-filtro por embeddings foi removido.
             let mcmds = []
             if (msgContent?.length) {
-                const filterCommands = await this.routeCandidateCommands(msgContent, context)
-                const promptIn = this.getPromptIn(context, filterCommands)
+                const promptIn = this.getPromptIn(context)
                 // fs.writeFileSync('./prompt-in-data.txt', promptIn)
 
                 const tJson = Date.now()
                 mcmds = await this.llmService.execute(promptIn, 'json')
-                llmCalls.push({ mode: 'json', latencyMs: Date.now() - tJson, parseOk: Array.isArray(mcmds) })
+                llmCalls.push({ mode: 'json', latencyMs: Date.now() - tJson, parseOk: Array.isArray(mcmds), ...(this.llmService.lastUsage || {}) })
                 mcmds = mcmds
                     .map(group => group.filter(cmd => context.agent.isCommandAvailable?.(cmd.type) ?? true))
                     .filter(group => group.length > 0)
@@ -987,7 +958,7 @@ class AgentRuntime {
                 // fs.writeFileSync('./prompt-out-data.txt', promptOut)
                 const tText = Date.now()
                 res = await this.llmService.execute(promptOut, 'text')
-                llmCalls.push({ mode: 'text', latencyMs: Date.now() - tText, parseOk: true })
+                llmCalls.push({ mode: 'text', latencyMs: Date.now() - tText, parseOk: true, ...(this.llmService.lastUsage || {}) })
             }
             res = { role: 'agent', content: res }
 

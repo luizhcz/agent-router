@@ -1,8 +1,8 @@
-// Log de auditoria/KPIs: grava, por turno, as tabelas turns / routing_events /
-// routing_candidates / command_executions / llm_calls (append-only) via um cliente
-// Postgres (mock hoje). É BEST-EFFORT — nunca lança para dentro do fluxo do chat
-// (auditoria não pode quebrar a conversa); em produção, considere fila/batch para
-// não somar latência ao turno, e torná-lo obrigatório se compliance exigir.
+// Log de auditoria/KPIs: grava, por turno, as tabelas turns / command_executions /
+// llm_calls (append-only) via um cliente Postgres. É BEST-EFFORT — nunca lança para
+// dentro do fluxo do chat (auditoria não pode quebrar a conversa); em produção,
+// considere fila/batch para não somar latência ao turno, e torná-lo obrigatório se
+// compliance exigir. (Sem router no chat de agente único: nada de routing_* aqui.)
 
 const crypto = require('crypto')
 
@@ -23,9 +23,6 @@ class AuditLog {
             const now = Date.now()
             const turnId = crypto.randomUUID()
             const results = flattenResults(t.results)
-            const executed = new Set(results.map(r => r && r.type).filter(Boolean))
-            const routing = t.routing || null
-            const candidates = (routing && routing.candidates) || []
             const isNotFound = results.some(r => r && r.type === 'notFound')
 
             await this._insert('turns', {
@@ -39,7 +36,6 @@ class AuditLog {
                 next_state: t.nextState ?? null,
                 interrupt: !!t.interrupt,
                 interrupt_type: t.interrupt ? (t.interrupt.state || t.interrupt.type || null) : null,
-                abstained: routing ? !!routing.abstained : null,
                 had_output_card: !!t.outputCardType,
                 output_card_type: t.outputCardType ?? null,
                 is_not_found: isNotFound,
@@ -48,39 +44,10 @@ class AuditLog {
                 created_at: now,
             })
 
-            if (routing) {
-                const reId = crypto.randomUUID()
-                await this._insert('routing_events', {
-                    id: reId,
-                    turn_id: turnId,
-                    query_text: t.userText ?? null,
-                    model_id: routing.modelId ?? null,
-                    catalog_fingerprint: routing.fingerprint ?? null,
-                    config_topk: candidates.length || null,
-                    abstained: !!routing.abstained,
-                    latency_ms: routing.latencyMs ?? null,
-                    created_at: now,
-                })
-                for (let i = 0; i < candidates.length; i++) {
-                    const c = candidates[i]
-                    await this._insert('routing_candidates', {
-                        id: crypto.randomUUID(),
-                        routing_event_id: reId,
-                        rank: i + 1,
-                        command_id: `${c.agent}.${c.method}`,
-                        agent: c.agent,
-                        method: c.method,
-                        score: c.score ?? null,
-                        was_executed: executed.has(c.method),
-                    })
-                }
-            }
-
             let seq = 0
             for (const r of results) {
                 if (!r || !r.type) continue
                 const method = r.type
-                const rank = candidates.findIndex(c => c.method === method)
                 await this._insert('command_executions', {
                     id: crypto.randomUUID(),
                     turn_id: turnId,
@@ -89,8 +56,6 @@ class AuditLog {
                     agent: (t.commandAgentByMethod && t.commandAgentByMethod.get(method)) || 'system',
                     result_status: statusOf(r),
                     output_card_type: null,
-                    in_router_topk: rank >= 0,
-                    router_rank: rank >= 0 ? rank + 1 : null,
                     created_at: now,
                 })
             }

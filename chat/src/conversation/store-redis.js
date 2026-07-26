@@ -2,6 +2,10 @@
 // resolução por mensagem (rápido + TTL). NÃO é a fonte da verdade — o durável
 // (Postgres) é. `save/load/remove` de baixo nível; o lifecycle (mint/status/TTL)
 // mora no WriteThroughStore.
+//
+// DECISÃO: o Redis (quente) guarda SÓ o registro de conversa (config) — o mínimo,
+// pra não sobrecarregar. Métricas/KPIs e histórico de mensagens ficam no Postgres
+// (frio), não aqui.
 
 const PREFIX = 'conversation:'
 const DEFAULT_TTL_SECONDS = 8 * 60 * 60

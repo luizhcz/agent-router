@@ -191,14 +191,10 @@
         }
 
         /* ── audit panel ──────────────────────────────────────────────── */
-        .audit-slot {
+        #audit-content {
             display: flex;
             flex-direction: column;
             gap: 10px;
-        }
-
-        .data-slot {
-            display: block;
         }
 
         .audit-card {
@@ -361,104 +357,16 @@
         }
 
         /* ── chat panel ───────────────────────────────────────────────── */
-        #chats {
-            flex: 1.4;
-            display: flex;
-            overflow: hidden;
-        }
-
-        .chat {
-            flex: 1;
-            min-width: 0;
+        #chat {
+            width: 40%;
+            flex-shrink: 0;
             display: flex;
             flex-direction: column;
             background: #f5f5f5;
-            border-left: 1px solid #e5e5e5;
             overflow: hidden;
-            transition: background 0.15s;
         }
 
-        .chat.focused {
-            background: #fff;
-        }
-
-        .chat-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 8px 12px;
-            background: #fafafa;
-            border-bottom: 1px solid #e5e5e5;
-            font-size: 12px;
-            flex-shrink: 0;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .chat.focused .chat-head {
-            background: #eff6ff;
-        }
-
-        .chat-head .chat-label {
-            font-weight: 600;
-            color: #999;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-
-        .chat.focused .chat-head .chat-label {
-            color: #1d4ed8;
-        }
-
-        .chat-head .chat-id {
-            font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-            font-size: 10px;
-            color: #999;
-            background: #f0f0f0;
-            border-radius: 4px;
-            padding: 2px 6px;
-        }
-
-        .chat-head .chat-head-left {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .chat-head .ver-input {
-            width: 60px;
-            font-size: 10px;
-            padding: 2px 6px;
-            border: 1px solid #e5e5e5;
-            border-radius: 4px;
-            outline: none;
-            color: #555;
-            user-select: text;
-            font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
-        }
-
-        .chat-head .ver-input:focus {
-            border-color: #1d4ed8;
-        }
-
-        .chat-head .ver-btn {
-            font-size: 10px;
-            line-height: 1;
-            padding: 3px 7px;
-            border: 1px solid #d4d4d4;
-            border-radius: 4px;
-            background: #fff;
-            color: #555;
-            cursor: pointer;
-        }
-
-        .chat-head .ver-btn:hover {
-            background: #eff6ff;
-            border-color: #1d4ed8;
-            color: #1d4ed8;
-        }
-
-        .messages {
+        #messages {
             flex: 1;
             overflow-y: auto;
             padding: 16px 14px;
@@ -467,15 +375,15 @@
             gap: 6px;
         }
 
-        .messages::-webkit-scrollbar {
+        #messages::-webkit-scrollbar {
             width: 4px;
         }
 
-        .messages::-webkit-scrollbar-track {
+        #messages::-webkit-scrollbar-track {
             background: transparent;
         }
 
-        .messages::-webkit-scrollbar-thumb {
+        #messages::-webkit-scrollbar-thumb {
             background: #ddd;
             border-radius: 2px;
         }
@@ -530,7 +438,7 @@
             font-size: 12px;
         }
 
-        .footer {
+        #footer {
             padding: 10px 12px;
             background: #fff;
             border-top: 1px solid #e5e5e5;
@@ -539,7 +447,7 @@
             align-items: flex-end;
         }
 
-        .input {
+        #input {
             flex: 1;
             background: #f9f9f9;
             border: 1px solid #e5e5e5;
@@ -555,15 +463,15 @@
             font-family: inherit;
         }
 
-        .input:focus {
+        #input:focus {
             border-color: #1d4ed8;
         }
 
-        .input::placeholder {
+        #input::placeholder {
             color: #bbb;
         }
 
-        .btn {
+        #btn {
             background: #1d4ed8;
             border: none;
             border-radius: 10px;
@@ -577,16 +485,16 @@
             transition: background 0.15s;
         }
 
-        .btn:hover {
+        #btn:hover {
             background: #2563eb;
         }
 
-        .btn:disabled {
+        #btn:disabled {
             background: #c7d7f5;
             cursor: default;
         }
 
-        .btn svg {
+        #btn svg {
             width: 15px;
             height: 15px;
             fill: #fff;
@@ -646,18 +554,6 @@
         .ord-when { font-family:'SF Mono','Cascadia Code','Consolas',monospace; font-size:10px; color:#bbb; }
         .cv-loading, .cv-error { padding:24px; text-align:center; color:#999; font-size:12px; }
         .cv-error { color:#ef4444; }
-        /* export p/ juiz (LLM-as-a-judge) */
-        .cv-bar { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
-        .cv-bar .cv-back { margin-bottom:0; }
-        .jx-btn { background:#1d4ed8; border:1px solid #1d4ed8; border-radius:8px; padding:6px 12px; font:inherit; font-size:12px; color:#fff; cursor:pointer; margin-left:auto; }
-        .jx-btn:hover { background:#1e40af; border-color:#1e40af; }
-        .jx-card { border:1px solid #dbe4ff; border-radius:10px; background:#f8faff; margin-bottom:14px; overflow:hidden; }
-        .jx-hd { display:flex; align-items:center; gap:8px; padding:9px 12px; border-bottom:1px solid #dbe4ff; background:#eff3ff; flex-wrap:wrap; }
-        .jx-title { font-size:11px; color:#666; } .jx-title b { color:#1d4ed8; font-family:'SF Mono','Cascadia Code','Consolas',monospace; }
-        .jx-act { display:flex; gap:6px; margin-left:auto; }
-        .jx-mini { background:#fff; border:1px solid #dbe4ff; border-radius:6px; padding:3px 9px; font:inherit; font-size:11px; color:#1d4ed8; cursor:pointer; }
-        .jx-mini:hover { background:#1d4ed8; color:#fff; border-color:#1d4ed8; }
-        .jx-json { margin:0; padding:12px; max-height:420px; overflow:auto; font-family:'SF Mono','Cascadia Code','Consolas',monospace; font-size:11px; line-height:1.5; color:#1a1a1a; white-space:pre; }
 
         /* ── métricas (KPIs) ──────────────────────────────────────────── */
         .mx-top { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px; flex-wrap:wrap; }
@@ -742,39 +638,42 @@
             </div>
         </div>
 
-        <div id="chats"></div>
+        <div id="chat">
+            <div id="messages"></div>
+            <div id="footer">
+                <textarea id="input" rows="1" placeholder="mensagem..."></textarea>
+                <button id="btn" onclick="send()">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M2 21l21-9L2 3v7l15 2-15 2z" />
+                    </svg>
+                </button>
+            </div>
+        </div>
 
     </div>
 
     <script>
 
         // ── context ───────────────────────────────────────────────────────
-        // A identidade chega pela hash (ex.: #admin:{ups} ou #digital:{acc}) e vai
-        // como header `context-id`. Para DOIS chats simultâneos do mesmo usuário/conta,
-        // cada chat ganha um sufixo `:{chatId}` (hash curto) na chave de contexto.
-        // No acesso direto (sem gateway) o `getContextId` só aplica o sufixo quando há
-        // `x-efs-account`/`x-efs-user-profile-id`; por isso compomos o sufixo direto no
-        // `context-id` (o `initializeContext` extrai a identidade com `.split(':')[0]`).
-        // Também enviamos `x-chat-id` para funcionar atrás do gateway.
-        const base = window.location.hash.slice(1) || undefined
-        const version = new URLSearchParams(window.location.search).get('version') || undefined
+        const contextId = window.location.hash.slice(1) || undefined
 
-        const genHash = () => (crypto?.randomUUID?.() || Math.random().toString(36).slice(2))
-            .replace(/[^a-z0-9]/gi, '').slice(0, 6)
-
-        // 2 chat-ids curtos por base; sessionStorage evita criar contextos novos a cada reload
-        const storeKey = `efs-chat-ids:${base || 'default'}`
-        function loadChatIds() {
-            try {
-                const saved = JSON.parse(sessionStorage.getItem(storeKey) || 'null')
-                if (Array.isArray(saved) && saved.length === 2 && saved.every(Boolean)) return saved
-            } catch { }
-            const ids = [genHash(), genHash()]
-            try { sessionStorage.setItem(storeKey, JSON.stringify(ids)) } catch { }
-            return ids
+        const ctxHeaders = (extra = {}) => {
+            const headers = { ...extra }
+            if (contextId) headers['context-id'] = contextId
+            return headers
         }
-        const chatIds = loadChatIds()
 
+        let cmdHistory = []
+        let historyIdx = -1
+
+        const messages = document.getElementById('messages')
+        const input = document.getElementById('input')
+        const btn = document.getElementById('btn')
+        const dataContent = document.getElementById('data-content')
+        const dataUpdated = document.getElementById('data-updated')
+        const auditContent = document.getElementById('audit-content')
+
+        // ── utils ─────────────────────────────────────────────────────────
         const now = () => new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
         function escHtml(str) {
@@ -785,7 +684,27 @@
                 .replace(/"/g, '&quot;')
         }
 
-        // painel Data/Audit é compartilhado; selectTab fica global (usado pelo onclick)
+        function scrollBottom() { messages.scrollTop = messages.scrollHeight }
+
+        // ── fetch ─────────────────────────────────────────────────────────
+        // 'not-found' é um estado ESPERADO (contexto novo, sem dados/histórico),
+        // não um erro. Centraliza a detecção para /data e /history.
+        const NOT_FOUND = Symbol('not-found')
+
+        async function fetchJson(url) {
+            const res = await fetch(url, { headers: ctxHeaders() })
+
+            // 404 -> contexto ainda sem dados/histórico
+            if (res.status === 404) return NOT_FOUND
+            if (!res.ok) throw new Error(`${url} -> ${res.status}`)
+
+            const body = await res.json()
+            // ou sinalizado no corpo: "not-found" / { status:'not-found' }
+            if (body === 'not-found' || body?.status === 'not-found') return NOT_FOUND
+            return body
+        }
+
+        // ── tabs ──────────────────────────────────────────────────────────
         function selectTab(name) {
             document.querySelectorAll('.tab').forEach(t => {
                 t.classList.toggle('active', t.textContent.toLowerCase() === name)
@@ -793,555 +712,425 @@
             document.querySelectorAll('.tab-panel').forEach(p => {
                 p.classList.toggle('active', p.id === `panel-${name}`)
             })
-            // abas globais (não dependem do chat em foco): carrega sob demanda
             if (name === 'conversas') loadConversas()
             if (name === 'metricas') loadMetrics()
         }
 
-        // foco: o painel Data/Audit compartilhado segue o chat ativo
-        const chats = []
-        let activeChat = null
-        function focusChat(chat) {
-            if (!chat || chat === activeChat) return
-            activeChat = chat
-            for (const c of chats) {
-                const on = c === chat
-                c.column.classList.toggle('focused', on)
-                c.dataContent.style.display = on ? '' : 'none'
-                c.auditContent.style.display = on ? '' : 'none'
-            }
-            chat.refreshData()
-        }
+        // ── input ─────────────────────────────────────────────────────────
+        input.addEventListener('input', () => {
+            input.style.height = 'auto'
+            input.style.height = Math.min(input.scrollHeight, 100) + 'px'
+        })
 
-        // fábrica de chat: uma instância isolada por contexto
-        function createChat({ label, contextId, chatId, dataContent, dataUpdated, auditContent }) {
-
-            // versão por chat (header x-version); default vem da query ?version=
-            let chatVer = version
-
-            const ctxHeaders = (extra = {}) => {
-                const headers = { ...extra }
-                if (contextId) headers['context-id'] = contextId
-                if (chatId) headers['x-chat-id'] = chatId
-                if (chatVer) headers['x-version'] = chatVer
-                return headers
+        input.addEventListener('keydown', async e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                send()
+                return
             }
 
-            let cmdHistory = []
-            let historyIdx = -1
-
-            const column = document.createElement('div')
-            column.className = 'chat'
-            column.innerHTML = `
-                <div class="chat-head">
-                    <span class="chat-head-left">
-                        <span class="chat-label">${escHtml(label)}</span>
-                        <input class="ver-input" type="text" placeholder="versão" value="${escHtml(version || '')}" title="x-version enviado neste chat" />
-                        <button class="ver-btn" type="button" title="aplicar versão ao header">ok</button>
-                    </span>
-                    <span class="chat-id">${escHtml(chatId || '—')}</span>
-                </div>
-                <div class="messages"></div>
-                <div class="footer">
-                    <textarea class="input" rows="1" placeholder="mensagem..."></textarea>
-                    <button class="btn" title="enviar">
-                        <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2z" /></svg>
-                    </button>
-                </div>`
-            document.getElementById('chats').appendChild(column)
-
-            const messages = column.querySelector('.messages')
-            const input = column.querySelector('.input')
-            const btn = column.querySelector('.btn')
-            const verInput = column.querySelector('.ver-input')
-            const verBtn = column.querySelector('.ver-btn')
-
-            // aplica a versão digitada ao header x-version deste chat
-            const applyVer = () => { chatVer = verInput.value.trim() || undefined }
-            verBtn.addEventListener('click', applyVer)
-            verInput.addEventListener('keydown', e => {
-                if (e.key === 'Enter') { e.preventDefault(); applyVer() }
-            })
-
-            column.addEventListener('mousedown', () => focusChat(self))
-            btn.addEventListener('click', () => send())
-
-            // ── utils ─────────────────────────────────────────────────────────
-            function scrollBottom() { messages.scrollTop = messages.scrollHeight }
-
-            // ── fetch ─────────────────────────────────────────────────────────
-            // 'not-found' é um estado ESPERADO (contexto novo, sem dados/histórico),
-            // não um erro. Centraliza a detecção para /data e /history.
-            const NOT_FOUND = Symbol('not-found')
-
-            async function fetchJson(url) {
-                const res = await fetch(url, { headers: ctxHeaders() })
-
-                // 404 -> contexto ainda sem dados/histórico
-                if (res.status === 404) return NOT_FOUND
-                if (!res.ok) throw new Error(`${url} -> ${res.status}`)
-
-                const body = await res.json()
-                // ou sinalizado no corpo: "not-found" / { status:'not-found' }
-                if (body === 'not-found' || body?.status === 'not-found') return NOT_FOUND
-                return body
-            }
-
-            // selectTab foi movido para o escopo global (compartilhado pelos 2 chats)
-
-            // ── input ─────────────────────────────────────────────────────────
-            input.addEventListener('input', () => {
+            if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                if (input.value.trim()) return
+                await ensureHistory()
+                if (!cmdHistory.length) return
+                historyIdx = Math.min(historyIdx + 1, cmdHistory.length - 1)
+                input.value = cmdHistory[historyIdx]
                 input.style.height = 'auto'
                 input.style.height = Math.min(input.scrollHeight, 100) + 'px'
-            })
+                requestAnimationFrame(() => {
+                    input.selectionStart = input.selectionEnd = input.value.length
+                })
+                return
+            }
 
-            input.addEventListener('keydown', async e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    send()
-                    return
-                }
-
-                if (e.key === 'ArrowUp') {
-                    e.preventDefault()
-                    if (input.value.trim()) return
-                    await ensureHistory()
-                    if (!cmdHistory.length) return
-                    historyIdx = Math.min(historyIdx + 1, cmdHistory.length - 1)
-                    input.value = cmdHistory[historyIdx]
+            if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                if (input.value.trim()) return
+                if (historyIdx <= 0) {
+                    historyIdx = -1
+                    input.value = ''
                     input.style.height = 'auto'
-                    input.style.height = Math.min(input.scrollHeight, 100) + 'px'
-                    requestAnimationFrame(() => {
-                        input.selectionStart = input.selectionEnd = input.value.length
-                    })
+                    return
+                }
+                historyIdx--
+                input.value = cmdHistory[historyIdx]
+                input.style.height = 'auto'
+                input.style.height = Math.min(input.scrollHeight, 100) + 'px'
+                return
+            }
+
+            historyIdx = -1
+        })
+
+        // ── chat ──────────────────────────────────────────────────────────
+        function appendMessage(text, role, rtt) {
+            const row = document.createElement('div')
+            row.className = `msg-row ${role}`
+
+            const bubble = document.createElement('div')
+            bubble.className = 'bubble'
+            bubble.innerHTML = escHtml(text).replace(/\n/g, '<br>')   // escapa + quebra de linha
+
+            const meta = document.createElement('div')
+            meta.className = 'meta'
+            meta.textContent = rtt !== undefined ? `${now()}  ·  ${rtt} ms` : now()
+
+            row.appendChild(bubble)
+            row.appendChild(meta)
+            messages.appendChild(row)
+            scrollBottom()
+            return row
+        }
+
+        function appendTyping() {
+            const row = document.createElement('div')
+            row.className = 'msg-row agent typing'
+            const bubble = document.createElement('div')
+            bubble.className = 'bubble'
+            bubble.textContent = 'digitando...'
+            row.appendChild(bubble)
+            messages.appendChild(row)
+            scrollBottom()
+            return row
+        }
+
+        // ── data ──────────────────────────────────────────────────────────
+
+        function resolveOutput(type) {
+            switch (type) {
+                case 'order_card':
+                    return { title: 'Boleta em Preenchimento', empty: 'nenhuma boleta em preenchimento', render: renderOrderCard }
+                case 'order_card@modify':
+                    return { title: 'Boleta de Modificação', empty: 'nenhuma boleta em preenchimento', render: renderOrderCard }
+                case 'order_card@cancel':
+                    return { title: 'Boleta de Cancelamento', empty: 'nenhuma boleta em preenchimento', render: renderOrderCard }
+                case 'basket_card':
+                    return { title: 'Cesta de Boletas', empty: 'nenhuma boleta na cesta', render: renderOrderCard }
+                case 'open_order_card':
+                case 'open_order_card@modify':
+                case 'open_order_card@cancel':
+                    return { title: 'Ordens Abertas', empty: 'nenhuma ordem aberta', render: renderOpenOrderCard }
+                default:
+                    return null
+            }
+        }
+
+        // ── formatters ──
+        const DASH = '—'
+        const fmtInt = v => v == null ? DASH : Number(v).toLocaleString('pt-BR')
+        const fmtMoney = v => v == null ? DASH : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        const fmtVolume = v => v == null ? DASH : 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        const fmtSide = v => ({ B: 'Compra', S: 'Venda' }[v] ?? v ?? DASH)
+        const fmtPrice = v => ({ L: 'Limitado', M: 'Mercado' }[v] ?? v ?? DASH)
+        const fmtRequestType = v => ({ C: 'Criação', M: 'Modificação', X: 'Cancelamento' }[v] ?? v ?? DASH)
+        const fmtDate = v => { const d = new Date(v); return isNaN(d) ? (v ?? DASH) : d.toLocaleDateString('pt-BR') }
+        const fmtDateTime = v => { const d = new Date(v); return isNaN(d) ? (v ?? DASH) : d.toLocaleString('pt-BR') }
+
+        const ORDER_FIELDS = [
+            { key: 'requestType', label: 'Operação', fmt: fmtRequestType },
+            { key: 'orderId', label: 'Ordem' },
+            { key: 'account', label: 'Conta' },
+            { key: 'symbol', label: 'Ativo' },
+            { key: 'side', label: 'Lado', fmt: fmtSide, cls: v => `side-${v}` },
+            { key: 'quantity', label: 'Qtd', fmt: fmtInt },
+            { key: 'volume', label: 'Vol. Financeiro', fmt: fmtVolume },
+            { key: 'quantityMin', label: 'Qtd Mín', fmt: fmtInt },
+            { key: 'quantityDisplay', label: 'Qtd Aparente', fmt: fmtInt },
+            { key: 'priceType', label: 'Tipo Preço', fmt: fmtPrice },
+            { key: 'price', label: 'Preço Limite', fmt: fmtMoney },
+            { key: 'trigger', label: 'Preço Gatilho', fmt: fmtMoney },
+            { key: 'expireType', label: 'Validade' },
+            { key: 'expireDate', label: 'Vencimento', fmt: fmtDate }
+        ]
+
+        const OPEN_ORDER_FIELDS = [
+            { key: 'orderId', label: 'Ordem' },
+            { key: 'account', label: 'Conta' },
+            { key: 'symbol', label: 'Ativo' },
+            { key: 'side', label: 'Lado', fmt: fmtSide, cls: v => `side-${v}` },
+            { key: 'quantity', label: 'Qtd', fmt: fmtInt },
+            { key: 'quantityMin', label: 'Qtd Mín', fmt: fmtInt },
+            { key: 'quantityDisplay', label: 'Qtd Aparente', fmt: fmtInt },
+            { key: 'priceType', label: 'Tipo Preço', fmt: fmtPrice },
+            { key: 'price', label: 'Preço Limite', fmt: fmtMoney },
+            { key: 'trigger', label: 'Preço Gatilho', fmt: fmtMoney },
+            { key: 'expireType', label: 'Validade' },
+            { key: 'expireTime', label: 'Expira em', fmt: fmtDate },
+            { key: 'creationTime', label: 'Criada em', fmt: fmtDateTime },
+            { key: 'orderStatus', label: 'Status' },
+            { key: 'requestType', label: 'Tipo Req' },
+            { key: 'requestStatus', label: 'Status Req' },
+            { key: 'pendingQuantity', label: 'Qtd Pendente', fmt: fmtInt },
+            { key: 'filledQuantity', label: 'Qtd Executada', fmt: fmtInt },
+            { key: 'filledAveragePrice', label: 'Preço Médio', fmt: fmtMoney },
+            { key: 'filledVolume', label: 'Volume Exec', fmt: fmtMoney },
+            { key: 'pendingVolume', label: 'Volume Pend', fmt: fmtMoney }
+        ]
+
+        async function refreshData() {
+            try {
+                const json = await fetchJson('/api/trader-chat/data')
+                if (json === NOT_FOUND) return renderEmptyData()   // estado esperado
+                renderData(json)
+            } catch (e) { console.warn('refreshData', e) }
+        }
+
+        function renderEmptyData() {
+            dataUpdated.textContent = `atualizado em ${now()}`
+            dataContent.innerHTML = ''
+            const empty = document.createElement('div')
+            empty.style.cssText = 'font-size:12px;color:#bbb;margin-top:8px'
+            empty.textContent = 'nenhum dado disponível ainda'
+            dataContent.appendChild(empty)
+        }
+
+        function renderData(json) {
+            dataUpdated.textContent = `atualizado em ${now()}`
+            dataContent.innerHTML = ''
+
+            // badge de status
+            const badge = document.createElement('div')
+            badge.className = `status-badge ${json.output_status || 'empty'}`
+            badge.textContent = json.message || json.output_status || ''
+            dataContent.appendChild(badge)
+
+            const type = json.output_type
+            const raw = json.output
+            // order_card (e variantes) vêm como objeto único; basket/open vêm como array
+            const items = Array.isArray(raw) ? raw : (raw ? [raw] : [])
+
+            const spec = resolveOutput(type)   // fonte única: label + empty + render
+
+            // título (label)
+            if (type) {
+                const title = document.createElement('div')
+                title.className = 'data-title'
+                title.textContent = spec?.title || type
+                dataContent.appendChild(title)
+            }
+
+            // tipo não coberto
+            if (!spec) {
+                if (!items.length) {
+                    const notice = document.createElement('div')
+                    notice.style.cssText = 'font-size:12px;color:#bbb;margin-top:8px'
+                    notice.textContent = type
+                        ? `visualização de "${type}" ainda não disponível`
+                        : 'nenhum dado para exibir'
+                    dataContent.appendChild(notice)
                     return
                 }
 
-                if (e.key === 'ArrowDown') {
-                    e.preventDefault()
-                    if (input.value.trim()) return
-                    if (historyIdx <= 0) {
-                        historyIdx = -1
-                        input.value = ''
-                        input.style.height = 'auto'
-                        return
-                    }
-                    historyIdx--
-                    input.value = cmdHistory[historyIdx]
-                    input.style.height = 'auto'
-                    input.style.height = Math.min(input.scrollHeight, 100) + 'px'
-                    return
+                for (const item of items) {
+                    const pre = document.createElement('pre')
+                    pre.className = 'json-fallback'
+                    pre.textContent = JSON.stringify(item, null, 2)   // textContent já escapa
+                    dataContent.appendChild(pre)
                 }
-
-                historyIdx = -1
-            })
-
-            // ── chat ──────────────────────────────────────────────────────────
-            function appendMessage(text, role, rtt) {
-                const row = document.createElement('div')
-                row.className = `msg-row ${role}`
-
-                const bubble = document.createElement('div')
-                bubble.className = 'bubble'
-                bubble.innerHTML = escHtml(text).replace(/\n/g, '<br>')   // escapa + quebra de linha
-
-                const meta = document.createElement('div')
-                meta.className = 'meta'
-                meta.textContent = rtt !== undefined ? `${now()}  ·  ${rtt} ms` : now()
-
-                row.appendChild(bubble)
-                row.appendChild(meta)
-                messages.appendChild(row)
-                scrollBottom()
-                return row
+                return
             }
 
-            function appendTyping() {
-                const row = document.createElement('div')
-                row.className = 'msg-row agent typing'
-                const bubble = document.createElement('div')
-                bubble.className = 'bubble'
-                bubble.textContent = 'digitando...'
-                row.appendChild(bubble)
-                messages.appendChild(row)
-                scrollBottom()
-                return row
-            }
-
-            // ── data ──────────────────────────────────────────────────────────
-
-            function resolveOutput(type) {
-                switch (type) {
-                    case 'order_card':
-                        return { title: 'Boleta em Preenchimento', empty: 'nenhuma boleta em preenchimento', render: renderOrderCard }
-                    case 'order_card@modify':
-                        return { title: 'Boleta de Modificação', empty: 'nenhuma boleta em preenchimento', render: renderOrderCard }
-                    case 'order_card@cancel':
-                        return { title: 'Boleta de Cancelamento', empty: 'nenhuma boleta em preenchimento', render: renderOrderCard }
-                    case 'basket_card':
-                        return { title: 'Cesta de Boletas', empty: 'nenhuma boleta na cesta', render: renderOrderCard }
-                    case 'open_order_card':
-                    case 'open_order_card@modify':
-                    case 'open_order_card@cancel':
-                        return { title: 'Ordens Abertas', empty: 'nenhuma ordem aberta', render: renderOpenOrderCard }
-                    default:
-                        return null
-                }
-            }
-
-            // ── formatters ──
-            const DASH = '—'
-            const fmtInt = v => v == null ? DASH : Number(v).toLocaleString('pt-BR')
-            const fmtMoney = v => v == null ? DASH : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-            const fmtVolume = v => v == null ? DASH : 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-            const fmtSide = v => ({ B: 'Compra', S: 'Venda' }[v] ?? v ?? DASH)
-            const fmtPrice = v => ({ L: 'Limitado', M: 'Mercado' }[v] ?? v ?? DASH)
-            const fmtRequestType = v => ({ C: 'Criação', M: 'Modificação', X: 'Cancelamento' }[v] ?? v ?? DASH)
-            const fmtDate = v => { const d = new Date(v); return isNaN(d) ? (v ?? DASH) : d.toLocaleDateString('pt-BR') }
-            const fmtDateTime = v => { const d = new Date(v); return isNaN(d) ? (v ?? DASH) : d.toLocaleString('pt-BR') }
-
-            const ORDER_FIELDS = [
-                { key: 'requestType', label: 'Operação', fmt: fmtRequestType },
-                { key: 'orderId', label: 'Ordem' },
-                { key: 'account', label: 'Conta' },
-                { key: 'symbol', label: 'Ativo' },
-                { key: 'side', label: 'Lado', fmt: fmtSide, cls: v => `side-${v}` },
-                { key: 'quantity', label: 'Qtd', fmt: fmtInt },
-                { key: 'volume', label: 'Vol. Financeiro', fmt: fmtVolume },
-                { key: 'quantityMin', label: 'Qtd Mín', fmt: fmtInt },
-                { key: 'quantityDisplay', label: 'Qtd Aparente', fmt: fmtInt },
-                { key: 'priceType', label: 'Tipo Preço', fmt: fmtPrice },
-                { key: 'price', label: 'Preço Limite', fmt: fmtMoney },
-                { key: 'trigger', label: 'Preço Gatilho', fmt: fmtMoney },
-                { key: 'expireType', label: 'Validade' },
-                { key: 'expireDate', label: 'Vencimento', fmt: fmtDate }
-            ]
-
-            const OPEN_ORDER_FIELDS = [
-                { key: 'orderId', label: 'Ordem' },
-                { key: 'account', label: 'Conta' },
-                { key: 'symbol', label: 'Ativo' },
-                { key: 'side', label: 'Lado', fmt: fmtSide, cls: v => `side-${v}` },
-                { key: 'quantity', label: 'Qtd', fmt: fmtInt },
-                { key: 'quantityMin', label: 'Qtd Mín', fmt: fmtInt },
-                { key: 'quantityDisplay', label: 'Qtd Aparente', fmt: fmtInt },
-                { key: 'priceType', label: 'Tipo Preço', fmt: fmtPrice },
-                { key: 'price', label: 'Preço Limite', fmt: fmtMoney },
-                { key: 'trigger', label: 'Preço Gatilho', fmt: fmtMoney },
-                { key: 'expireType', label: 'Validade' },
-                { key: 'expireTime', label: 'Expira em', fmt: fmtDate },
-                { key: 'creationTime', label: 'Criada em', fmt: fmtDateTime },
-                { key: 'orderStatus', label: 'Status' },
-                { key: 'requestType', label: 'Tipo Req' },
-                { key: 'requestStatus', label: 'Status Req' },
-                { key: 'pendingQuantity', label: 'Qtd Pendente', fmt: fmtInt },
-                { key: 'filledQuantity', label: 'Qtd Executada', fmt: fmtInt },
-                { key: 'filledAveragePrice', label: 'Preço Médio', fmt: fmtMoney },
-                { key: 'filledVolume', label: 'Volume Exec', fmt: fmtMoney },
-                { key: 'pendingVolume', label: 'Volume Pend', fmt: fmtMoney }
-            ]
-
-            async function refreshData() {
-                try {
-                    const json = await fetchJson('/api/trader-chat/data')
-                    if (json === NOT_FOUND) return renderEmptyData()   // estado esperado
-                    renderData(json)
-                } catch (e) { console.warn('refreshData', e) }
-            }
-
-            function renderEmptyData() {
-                dataUpdated.textContent = `atualizado em ${now()}`
-                dataContent.innerHTML = ''
+            // coberto, porém sem itens
+            if (!items.length) {
                 const empty = document.createElement('div')
                 empty.style.cssText = 'font-size:12px;color:#bbb;margin-top:8px'
-                empty.textContent = 'nenhum dado disponível ainda'
+                empty.textContent = spec.empty
                 dataContent.appendChild(empty)
+                return
             }
 
-            function renderData(json) {
-                dataUpdated.textContent = `atualizado em ${now()}`
-                dataContent.innerHTML = ''
+            // render
+            for (const item of items) {
+                dataContent.appendChild(spec.render(item))
+            }
+        }
 
-                // badge de status
-                const badge = document.createElement('div')
-                badge.className = `status-badge ${json.output_status || 'empty'}`
-                badge.textContent = json.message || json.output_status || ''
-                dataContent.appendChild(badge)
+        function renderCardFields(item, fields) {
+            const card = document.createElement('div')
+            card.className = 'order-card'
 
-                const type = json.output_type
-                const raw = json.output
-                // order_card (e variantes) vêm como objeto único; basket/open vêm como array
-                const items = Array.isArray(raw) ? raw : (raw ? [raw] : [])
+            for (const f of fields) {
+                const raw = item[f.key]
+                if (raw == null || raw === '') continue   // omite vazios; preserva 0
 
-                const spec = resolveOutput(type)   // fonte única: label + empty + render
+                const val = f.fmt ? f.fmt(raw) : raw
+                const cls = f.cls ? ` ${f.cls(raw)}` : ''
 
-                // título (label)
-                if (type) {
-                    const title = document.createElement('div')
-                    title.className = 'data-title'
-                    title.textContent = spec?.title || type
-                    dataContent.appendChild(title)
+                const field = document.createElement('div')
+                field.className = 'field'
+                field.innerHTML =
+                    `<span class="label">${escHtml(f.label)}</span>` +
+                    `<span class="value${cls}">${escHtml(val)}</span>`
+                card.appendChild(field)
+            }
+
+            return card
+        }
+
+        function renderOrderCard(item) {
+            return renderCardFields(item, ORDER_FIELDS)
+        }
+
+        function renderOpenOrderCard(item) {
+            return renderCardFields(item, OPEN_ORDER_FIELDS)
+        }
+
+        // ── audit ─────────────────────────────────────────────────────────
+        async function refreshAudit() {
+            try {
+                const msgs = await fetchJson('/api/trader-chat/history?role=user&count=1&audit=true')
+                if (msgs === NOT_FOUND || !msgs?.length) return   // esperado: ainda sem histórico
+
+                const msg = msgs[0]
+                renderAuditCard(msg)
+
+                if (msg.content && cmdHistory[0] !== msg.content) {
+                    cmdHistory.unshift(msg.content)
                 }
+            } catch (e) { console.warn('refreshAudit', e) }
+        }
 
-                // tipo não coberto
-                if (!spec) {
-                    if (!items.length) {
-                        const notice = document.createElement('div')
-                        notice.style.cssText = 'font-size:12px;color:#bbb;margin-top:8px'
-                        notice.textContent = type
-                            ? `visualização de "${type}" ainda não disponível`
-                            : 'nenhum dado para exibir'
-                        dataContent.appendChild(notice)
-                        return
-                    }
+        async function ensureHistory() {
+            if (cmdHistory.length) return
+            try {
+                const msgs = await fetchJson('/api/trader-chat/history?role=user')
+                if (msgs === NOT_FOUND) return            // esperado: sem histórico
+                cmdHistory = msgs.map(m => m.content).reverse()
+            } catch (e) { console.warn('ensureHistory', e) }
+        }
 
-                    for (const item of items) {
-                        const pre = document.createElement('pre')
-                        pre.className = 'json-fallback'
-                        pre.textContent = JSON.stringify(item, null, 2)   // textContent já escapa
-                        dataContent.appendChild(pre)
-                    }
-                    return
-                }
+        function renderAuditCard(msg) {
+            const card = document.createElement('div')
+            card.className = 'audit-card'
 
-                // coberto, porém sem itens
-                if (!items.length) {
-                    const empty = document.createElement('div')
-                    empty.style.cssText = 'font-size:12px;color:#bbb;margin-top:8px'
-                    empty.textContent = spec.empty
-                    dataContent.appendChild(empty)
-                    return
-                }
+            // header
+            const header = document.createElement('div')
+            header.className = 'audit-card-header'
+            header.innerHTML = `<span class="msg-preview">${escHtml(msg.content)}</span><span>${now()}</span>`
+            card.appendChild(header)
 
-                // render
-                for (const item of items) {
-                    dataContent.appendChild(spec.render(item))
-                }
-            }
-
-            function renderCardFields(item, fields) {
-                const card = document.createElement('div')
-                card.className = 'order-card'
-
-                for (const f of fields) {
-                    const raw = item[f.key]
-                    if (raw == null || raw === '') continue   // omite vazios; preserva 0
-
-                    const val = f.fmt ? f.fmt(raw) : raw
-                    const cls = f.cls ? ` ${f.cls(raw)}` : ''
-
-                    const field = document.createElement('div')
-                    field.className = 'field'
-                    field.innerHTML =
-                        `<span class="label">${escHtml(f.label)}</span>` +
-                        `<span class="value${cls}">${escHtml(val)}</span>`
-                    card.appendChild(field)
-                }
-
-                return card
-            }
-
-            function renderOrderCard(item) {
-                return renderCardFields(item, ORDER_FIELDS)
-            }
-
-            function renderOpenOrderCard(item) {
-                return renderCardFields(item, OPEN_ORDER_FIELDS)
-            }
-
-            // ── audit ─────────────────────────────────────────────────────────
-            async function refreshAudit() {
-                try {
-                    const msgs = await fetchJson('/api/trader-chat/history?role=user&count=1&audit=true')
-                    if (msgs === NOT_FOUND || !msgs?.length) return   // esperado: ainda sem histórico
-
-                    const msg = msgs[0]
-                    renderAuditCard(msg)
-
-                    if (msg.content && cmdHistory[0] !== msg.content) {
-                        cmdHistory.unshift(msg.content)
-                    }
-                } catch (e) { console.warn('refreshAudit', e) }
-            }
-
-            async function ensureHistory() {
-                if (cmdHistory.length) return
-                try {
-                    const msgs = await fetchJson('/api/trader-chat/history?role=user')
-                    if (msgs === NOT_FOUND) return            // esperado: sem histórico
-                    cmdHistory = msgs.map(m => m.content).reverse()
-                } catch (e) { console.warn('ensureHistory', e) }
-            }
-
-            function renderAuditCard(msg) {
-                const card = document.createElement('div')
-                card.className = 'audit-card'
-
-                // header
-                const header = document.createElement('div')
-                header.className = 'audit-card-header'
-                header.innerHTML = `<span class="msg-preview">${escHtml(msg.content)}</span><span>${now()}</span>`
-                card.appendChild(header)
-
-                // state transition
-                const stateChanged = msg.state !== msg.stateNext
-                const stateRow = document.createElement('div')
-                stateRow.className = 'audit-state'
-                stateRow.innerHTML = `
+            // state transition
+            const stateChanged = msg.state !== msg.stateNext
+            const stateRow = document.createElement('div')
+            stateRow.className = 'audit-state'
+            stateRow.innerHTML = `
             <span>estado</span>
             <span class="state-val">${escHtml(msg.state || 'default')}</span>
             <span class="arrow">→</span>
             <span class="state-val ${stateChanged ? 'changed' : ''}">${escHtml(msg.stateNext || 'default')}</span>
         `
-                card.appendChild(stateRow)
+            card.appendChild(stateRow)
 
-                // commands
-                const cmds = (msg.commands || []).flat()
-                if (cmds.length > 0) {
-                    const sec = document.createElement('div')
-                    sec.className = 'audit-section'
-                    sec.innerHTML = `<div class="audit-section-label">comandos reconhecidos</div>`
+            // commands
+            const cmds = (msg.commands || []).flat()
+            if (cmds.length > 0) {
+                const sec = document.createElement('div')
+                sec.className = 'audit-section'
+                sec.innerHTML = `<div class="audit-section-label">comandos reconhecidos</div>`
 
-                    const group = document.createElement('div')
-                    group.className = 'audit-cmd-group'
+                const group = document.createElement('div')
+                group.className = 'audit-cmd-group'
 
-                    for (const cmd of cmds) {
-                        const params = Object.entries(cmd)
-                            .filter(([k]) => k !== 'type')
-                            .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
-                            .join('  ')
+                for (const cmd of cmds) {
+                    const params = Object.entries(cmd)
+                        .filter(([k]) => k !== 'type')
+                        .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+                        .join('  ')
 
-                        const tag = document.createElement('span')
-                        tag.className = 'audit-cmd-tag'
-                        tag.innerHTML = `<strong>${escHtml(cmd.type)}</strong>${params ? `<span class="cmd-params"> ${escHtml(params)}</span>` : ''}`
-                        group.appendChild(tag)
-                    }
-
-                    sec.appendChild(group)
-                    card.appendChild(sec)
+                    const tag = document.createElement('span')
+                    tag.className = 'audit-cmd-tag'
+                    tag.innerHTML = `<strong>${escHtml(cmd.type)}</strong>${params ? `<span class="cmd-params"> ${escHtml(params)}</span>` : ''}`
+                    group.appendChild(tag)
                 }
 
-                // results
-                const results = (msg.results || []).flat()
-                if (results.length > 0) {
-                    const sec = document.createElement('div')
-                    sec.className = 'audit-section'
-                    sec.innerHTML = `<div class="audit-section-label">resultados</div>`
+                sec.appendChild(group)
+                card.appendChild(sec)
+            }
 
-                    const list = document.createElement('div')
-                    list.className = 'audit-result-list'
+            // results
+            const results = (msg.results || []).flat()
+            if (results.length > 0) {
+                const sec = document.createElement('div')
+                sec.className = 'audit-section'
+                sec.innerHTML = `<div class="audit-section-label">resultados</div>`
 
-                    for (const r of results) {
-                        const hasInstruction = !!r.instruction
-                        const hasInterrupt = !!r.interrupt
+                const list = document.createElement('div')
+                list.className = 'audit-result-list'
 
-                        const item = document.createElement('div')
-                        item.className = `audit-result-item${hasInstruction ? ' has-instruction' : ''}${hasInterrupt ? ' has-interrupt' : ''}`
+                for (const r of results) {
+                    const hasInstruction = !!r.instruction
+                    const hasInterrupt = !!r.interrupt
 
-                        const typeClass = hasInterrupt ? 'interrupt' : hasInstruction ? 'instruction' : ''
-                        const rest = Object.entries(r)
-                            .filter(([k]) => k !== 'type')
-                            .map(([k, v]) => `<span style="color:#999">${escHtml(k)}:</span> ${escHtml(JSON.stringify(v))}`)
-                            .join('  ')
+                    const item = document.createElement('div')
+                    item.className = `audit-result-item${hasInstruction ? ' has-instruction' : ''}${hasInterrupt ? ' has-interrupt' : ''}`
 
-                        item.innerHTML = `<span class="audit-result-type ${typeClass}">${escHtml(r.type)}</span>${rest}`
-                        list.appendChild(item)
-                    }
+                    const typeClass = hasInterrupt ? 'interrupt' : hasInstruction ? 'instruction' : ''
+                    const rest = Object.entries(r)
+                        .filter(([k]) => k !== 'type')
+                        .map(([k, v]) => `<span style="color:#999">${escHtml(k)}:</span> ${escHtml(JSON.stringify(v))}`)
+                        .join('  ')
 
-                    sec.appendChild(list)
-                    card.appendChild(sec)
+                    item.innerHTML = `<span class="audit-result-type ${typeClass}">${escHtml(r.type)}</span>${rest}`
+                    list.appendChild(item)
                 }
 
-                auditContent.prepend(card)
+                sec.appendChild(list)
+                card.appendChild(sec)
             }
 
-            // ── api ───────────────────────────────────────────────────────────
-            async function post(content) {
-                const res = await fetch('/api/trader-chat', {
-                    method: 'POST',
-                    headers: ctxHeaders({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify({ content })
-                })
-                if (!res.ok) throw new Error(`send error: ${res.status}`)
-                return res.json()
-            }
-
-            async function receive() {
-                const res = await fetch('/api/trader-chat', {
-                    headers: ctxHeaders()
-                })
-                if (!res.ok) throw new Error(`receive error: ${res.status}`)
-                return res.json()
-            }
-
-            // ── send ──────────────────────────────────────────────────────────
-            async function send() {
-                const text = input.value.trim()
-                if (!text) return
-
-                focusChat(self)   // painel Data/Audit passa a seguir este chat
-
-                input.value = ''
-                input.style.height = 'auto'
-                btn.disabled = true
-
-                appendMessage(text, 'user')
-                const typing = appendTyping()
-                const t0 = performance.now()
-
-                try {
-                    await post(text)
-                    const msg = await receive()
-                    const rtt = Math.round(performance.now() - t0)
-                    typing.remove()
-                    appendMessage(msg.content, 'agent', rtt)
-                    await refreshData()
-                    await refreshAudit()
-                } catch (e) {
-                    typing.remove()
-                    appendMessage('erro ao obter resposta.', 'agent')
-                    console.error(e)
-                } finally {
-                    btn.disabled = false
-                    input.focus()
-                }
-            }
-
-            // ── init ──────────────────────────────────────────────────────────
-            async function loadHistory() {
-                try {
-                    const msgs = await fetchJson('/api/trader-chat/history')
-                    if (msgs === NOT_FOUND || !msgs?.length) return   // esperado: contexto novo
-
-                    cmdHistory = msgs
-                        .filter(m => m.role === 'user')
-                        .map(m => m.content)
-                        .reverse()
-
-                    for (const msg of msgs) {
-                        if (msg.role === 'user' || msg.role === 'agent') {
-                            appendMessage(msg.content, msg.role)
-                        }
-                    }
-
-                    scrollBottom()
-                } catch (e) { console.warn('loadHistory', e) }
-            }
-
-            loadHistory()
-
-            // API pública da instância (usada pelo foco compartilhado)
-            const self = { column, input, dataContent, auditContent, refreshData, loadHistory, focus: () => focusChat(self) }
-            chats.push(self)
-            return self
+            auditContent.prepend(card)
         }
 
-        // ═══ observabilidade (abas globais Conversas + Métricas) ════════════
-        // Diferente de Data/Audit (por chat/contexto), estas abas são GLOBAIS:
-        // consultam os endpoints /api/trader-chat/metrics* sem context-id. Ficam
-        // no escopo global (como selectTab/focusChat). Usam `escHtml` global; DASH
-        // é redeclarado aqui (o de createChat é local à fábrica, não vaza).
-        const DASH = '—'
+        // ── api ───────────────────────────────────────────────────────────
+        async function post(content) {
+            const res = await fetch('/api/trader-chat', {
+                method: 'POST',
+                headers: ctxHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ content })
+            })
+            if (!res.ok) throw new Error(`send error: ${res.status}`)
+            return res.json()
+        }
+
+        async function receive() {
+            const res = await fetch('/api/trader-chat', {
+                headers: ctxHeaders()
+            })
+            if (!res.ok) throw new Error(`receive error: ${res.status}`)
+            return res.json()
+        }
+
+        // ── send ──────────────────────────────────────────────────────────
+        async function send() {
+            const text = input.value.trim()
+            if (!text) return
+
+            input.value = ''
+            input.style.height = 'auto'
+            btn.disabled = true
+
+            appendMessage(text, 'user')
+            const typing = appendTyping()
+            const t0 = performance.now()
+
+            try {
+                await post(text)
+                const msg = await receive()
+                const rtt = Math.round(performance.now() - t0)
+                typing.remove()
+                appendMessage(msg.content, 'agent', rtt)
+                await refreshData()
+                await refreshAudit()
+            } catch (e) {
+                typing.remove()
+                appendMessage('erro ao obter resposta.', 'agent')
+                console.error(e)
+            } finally {
+                btn.disabled = false
+                input.focus()
+            }
+        }
 
         // ── conversas (auditoria: lista das 50 + reconstrução por inteiro) ──
         const conversasContent = document.getElementById('conversas-content')
@@ -1440,43 +1229,7 @@
                     return `<div class="ord-row"><span class="ord-type ${sent ? 'sent' : 'cancel'}">${sent ? 'enviada' : 'cancelada'}</span><span class="ord-sym">${escHtml(o.symbol || '?')}</span><span class="ord-det">${escHtml(o.side || '')} ${cvNum(o.quantity)}${o.price != null ? ' @ ' + cvNum(o.price, 2) : ''}${o.reason ? ' <span class="ord-reason">· ' + escHtml(o.reason) + '</span>' : ''}</span><span class="ord-when">${cvTime(o.created_at)}</span></div>`
                 }).join('') + '</div>'
             }
-            const bar = `<div class="cv-bar"><button class="cv-back" onclick="renderConvList()">← voltar às conversas</button><button class="jx-btn" onclick="exportConversa('${escHtml(c.id)}')">⤓ exportar p/ juiz</button></div>`
-            conversasContent.innerHTML = `${bar}${meta}<div id="jx-out"></div>${turns}${orders}`
-        }
-
-        // ── export p/ LLM-as-a-judge (a partir da conversa reconstruída) ────
-        let jxLast = null   // último JSON exportado (usado por copiar/baixar)
-        async function exportConversa(id) {
-            const out = document.getElementById('jx-out')
-            if (!out) return
-            out.innerHTML = '<div class="cv-loading">gerando export p/ juiz…</div>'
-            try {
-                const data = await cvFetch('/api/trader-chat/metrics/conversation/export?id=' + encodeURIComponent(id))
-                jxLast = JSON.stringify(data, null, 2)
-                out.innerHTML = `<div class="jx-card">
-                    <div class="jx-hd"><span class="jx-title">export p/ juiz · <b>${escHtml(data.schema || '?')}</b> · ${data.transcript ? data.transcript.length : 0} turns</span>
-                        <span class="jx-act">
-                            <button class="jx-mini" onclick="jxCopy(this)">copiar</button>
-                            <button class="jx-mini" onclick="jxDownload('${escHtml(id)}')">baixar .json</button>
-                            <button class="jx-mini" onclick="document.getElementById('jx-out').innerHTML=''">fechar</button>
-                        </span></div>
-                    <pre class="jx-json">${escHtml(jxLast)}</pre></div>`
-            } catch (e) { out.innerHTML = '<div class="cv-error">falha ao gerar export</div>'; console.warn('exportConversa', e) }
-        }
-        function jxCopy(btn) {
-            if (!jxLast) return
-            navigator.clipboard?.writeText(jxLast).then(() => {
-                if (!btn) return
-                const t = btn.textContent; btn.textContent = 'copiado ✓'
-                setTimeout(() => { btn.textContent = t }, 1200)
-            }, () => { })
-        }
-        function jxDownload(id) {
-            if (!jxLast) return
-            const blob = new Blob([jxLast], { type: 'application/json' })
-            const a = document.createElement('a')
-            a.href = URL.createObjectURL(blob); a.download = `judge-${id}.json`
-            document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href)
+            conversasContent.innerHTML = `<button class="cv-back" onclick="renderConvList()">← voltar às conversas</button>${meta}${turns}${orders}`
         }
 
         // ── métricas (KPIs por período: 1d/1w/1m/3m) ────────────────────────
@@ -1578,32 +1331,30 @@
             metricsContent.innerHTML = html
         }
 
-        // ── bootstrap: dois chats lado a lado, cada um com seu chat-id ──────
-        const dataHost = document.getElementById('data-content')
-        const auditHost = document.getElementById('audit-content')
-        const dataUpdated = document.getElementById('data-updated')
+        // ── init ──────────────────────────────────────────────────────────
+        async function loadHistory() {
+            try {
+                const msgs = await fetchJson('/api/trader-chat/history')
+                if (msgs === NOT_FOUND || !msgs?.length) return   // esperado: contexto novo
 
-        chatIds.forEach((id, i) => {
-            const dataSlot = document.createElement('div')
-            dataSlot.className = 'data-slot'
-            dataHost.appendChild(dataSlot)
+                cmdHistory = msgs
+                    .filter(m => m.role === 'user')
+                    .map(m => m.content)
+                    .reverse()
 
-            const auditSlot = document.createElement('div')
-            auditSlot.className = 'audit-slot'
-            auditHost.appendChild(auditSlot)
+                for (const msg of msgs) {
+                    if (msg.role === 'user' || msg.role === 'agent') {
+                        appendMessage(msg.content, msg.role)
+                    }
+                }
 
-            createChat({
-                label: `chat ${i + 1}`,
-                contextId: base ? `${base}:${id}` : id,
-                chatId: id,
-                dataContent: dataSlot,
-                dataUpdated,
-                auditContent: auditSlot
-            })
-        })
+                scrollBottom()
+            } catch (e) { console.warn('loadHistory', e) }
+        }
 
-        focusChat(chats[0])
-        chats[0]?.input?.focus()
+        refreshData()
+        loadHistory()
+        input.focus()
 
     </script>
 </body>

@@ -44,7 +44,6 @@ CREATE TABLE IF NOT EXISTS turns (
     next_state       TEXT,
     interrupt        BOOLEAN,
     interrupt_type   TEXT,
-    abstained        BOOLEAN,
     had_output_card  BOOLEAN,
     output_card_type TEXT,
     is_not_found     BOOLEAN,
@@ -56,33 +55,6 @@ CREATE TABLE IF NOT EXISTS turns (
 CREATE INDEX IF NOT EXISTS idx_turns_conversation_id ON turns (conversation_id);
 CREATE INDEX IF NOT EXISTS idx_turns_created_at      ON turns (created_at);
 
-CREATE TABLE IF NOT EXISTS routing_events (
-    id                  TEXT PRIMARY KEY,
-    turn_id             TEXT REFERENCES turns (id) ON DELETE CASCADE,
-    query_text          TEXT,
-    model_id            TEXT,
-    catalog_fingerprint TEXT,
-    config_topk         BIGINT,
-    abstained           BOOLEAN,
-    latency_ms          DOUBLE PRECISION,
-    created_at          BIGINT
-);
-
-CREATE INDEX IF NOT EXISTS idx_routing_events_turn_id ON routing_events (turn_id);
-
-CREATE TABLE IF NOT EXISTS routing_candidates (
-    id               TEXT PRIMARY KEY,
-    routing_event_id TEXT REFERENCES routing_events (id) ON DELETE CASCADE,
-    rank             BIGINT,
-    command_id       TEXT,
-    agent            TEXT,
-    method           TEXT,
-    score            DOUBLE PRECISION,
-    was_executed     BOOLEAN
-);
-
-CREATE INDEX IF NOT EXISTS idx_routing_candidates_event ON routing_candidates (routing_event_id);
-
 CREATE TABLE IF NOT EXISTS command_executions (
     id               TEXT PRIMARY KEY,
     turn_id          TEXT REFERENCES turns (id) ON DELETE CASCADE,
@@ -91,8 +63,6 @@ CREATE TABLE IF NOT EXISTS command_executions (
     agent            TEXT,
     result_status    TEXT,
     output_card_type TEXT,
-    in_router_topk   BOOLEAN,
-    router_rank      BIGINT,
     created_at       BIGINT
 );
 
@@ -112,3 +82,57 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_calls_turn_id ON llm_calls (turn_id);
+
+-- ============================================================================
+-- Eventos de ORDEM (EXTERNOS: ORDER_SENT / ORDER_CANCELED). Fonte da verdade
+-- dos KPIs de execução — quantas ordens foram enviadas/canceladas e o MOTIVO do
+-- cancelamento. Chegam pelo backend de ordens via POST /api/trader-chat/event,
+-- fora do fluxo de conversa (não é um turno). `conversation_id` liga a ordem à
+-- conversa que a originou, quando conhecido.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS order_events (
+    id              TEXT PRIMARY KEY,
+    event_type      TEXT,               -- ORDER_SENT | ORDER_CANCELED
+    account         TEXT,
+    order_id        TEXT,
+    symbol          TEXT,
+    side            TEXT,               -- BUY | SELL
+    quantity        DOUBLE PRECISION,
+    price           DOUBLE PRECISION,
+    reason          TEXT,               -- motivo (preenchido só em ORDER_CANCELED)
+    conversation_id TEXT REFERENCES conversations (id) ON DELETE SET NULL,
+    context_id      TEXT,
+    created_at      BIGINT
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_events_account    ON order_events (account);
+CREATE INDEX IF NOT EXISTS idx_order_events_type       ON order_events (event_type);
+CREATE INDEX IF NOT EXISTS idx_order_events_created_at ON order_events (created_at);
+
+-- ============================================================================
+-- Preço por modelo de LLM (tabela de referência p/ métricas de CUSTO). model_id
+-- casa com llm_calls.model; o custo de cada chamada = input_tokens*price_per_input
+-- + output_tokens*price_per_output, respeitando a vigência (effective_from/to).
+-- Preços em `currency` por TOKEN. Tempo em BIGINT epoch-ms. (nomes de coluna em
+-- snake_case, seguindo o resto do schema: ModelId->model_id, etc.)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS model_pricing (
+    id                     TEXT PRIMARY KEY,
+    model_id               TEXT NOT NULL,          -- casa com llm_calls.model
+    provider               TEXT,
+    price_per_input_token  NUMERIC,                -- preço por token de ENTRADA (em `currency`)
+    price_per_output_token NUMERIC,                -- preço por token de SAÍDA
+    currency               TEXT,
+    effective_from         BIGINT,                 -- vigência inicial (epoch-ms)
+    effective_to           BIGINT,                 -- vigência final; NULL = vigente
+    created_at             BIGINT,
+    UNIQUE (model_id, effective_from)
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_pricing_model ON model_pricing (model_id);
+
+-- Seed de preços (idempotente via ON CONFLICT). USD por token.
+INSERT INTO model_pricing (id, model_id, provider, price_per_input_token, price_per_output_token, currency, effective_from, effective_to, created_at) VALUES
+    ('mp_gpt54mini_v1', 'gpt-5.4-mini', 'openai', 0.00000015, 0.00000060, 'USD', 1704067200000, NULL, 1704067200000),
+    ('mp_gpt54_v1',     'gpt-5.4',      'openai', 0.00000250, 0.00001000, 'USD', 1704067200000, NULL, 1704067200000)
+ON CONFLICT (model_id, effective_from) DO NOTHING;
