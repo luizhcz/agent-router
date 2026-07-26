@@ -1,7 +1,7 @@
 const { AccountService } = require("./mock/account-service")
 const { AlertService } = require("./mock/alert-service")
 const { AgentRuntime } = require("./agent-runtime")
-require("./agents")
+require("./trader-agent")
 const { AwsSecrets } = require("./mock/aws-secrets")
 const { DbClient } = require("./mock/db-client")
 const { HttpServer } = require("./mock/http-server")
@@ -100,19 +100,9 @@ class Application {
         await runtime.initialize('trader-agent')
         EnvUtils.setInstance('runtime', runtime)
 
-        // Router de intenções (embeddings MiniLM offline): pré-filtra os comandos
-        // tagueados (trader/content) a um top-8 antes da LLM. Depende dos
-        // commandElements do runtime, por isso vem depois do initialize. Falha aqui
-        // NÃO é fatal — o chat segue sem pré-filtro (todos os comandos vão à LLM).
-        try {
-            const { ChatIntentRouter } = require('./router')
-            const intentRouter = new ChatIntentRouter({ topK: 8 })
-            const info = await intentRouter.initialize(runtime.commandElements)
-            EnvUtils.setInstance('intentRouter', intentRouter)
-            console.log(`[Router] pronto — ${info.commands} comandos (${info.agents.join('/')}) → top-8 por consulta`)
-        } catch (err) {
-            console.error('[Router] indisponível, seguindo sem pré-filtro:', err.message)
-        }
+        // (Sem roteador de intenções: agente único trader — todos os comandos vão
+        // ao prompt da LLM. routeCandidateCommands do runtime devolve undefined sem
+        // o 'intentRouter' no EnvUtils, mantendo o comportamento original.)
 
         // Registro de conversas (config durável: versão + agentes + dono) + KPIs.
         // WRITE-THROUGH: Postgres (fonte da verdade, auditável) + Redis (cache quente).

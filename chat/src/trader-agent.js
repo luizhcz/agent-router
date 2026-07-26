@@ -1,6 +1,1805 @@
-const { AgentRuntime } = require("../agent-runtime")
-const { EnvUtils, Utils } = require("../utils")
-const { BaseAgent, tool, nowTick, DEFAULT_PAGE_SIZE } = require("./base-agent")
+const { AgentRuntime } = require("./agent-runtime")
+const { EnvUtils, Utils } = require("./utils")
+
+// ============================================================================
+// AGENTE ÚNICO (trader). Fusão de base-agent + trader-agent + content-agent:
+// BaseAgent segue como base de máquina/estado; TODOS os comandos (trader + os
+// antigos "content"/Research) vivem em TraderAgent. Sem split, sem router.
+// ============================================================================
+
+let tick = 0
+const nowTick = () => {
+    let ts = Date.now()
+    if (ts < tick) {
+        ts = tick
+    }
+    tick = ts + 1
+    return tick
+}
+
+function tool(meta) {
+    return function (target, key) {
+        const original = target.prototype[key];
+        original.version = meta.version;
+        original.toolName = meta.name;
+        target.prototype[key] = original;
+    };
+}
+
+const DEFAULT_PAGE_SIZE = 5
+
+class BaseAgent {
+    async initialize() {
+
+        this.isAdminMode = false
+        this.isDigitalMode = false
+
+        this.headers = undefined
+
+        this.accountService = EnvUtils.getInstance('accountService')
+        this.alertService = EnvUtils.getInstance('alertService')
+        this.orderService = EnvUtils.getInstance('orderService')
+        this.positionService = EnvUtils.getInstance('positionService')
+        this.marketDataService = EnvUtils.getInstance('marketDataService')
+        this.portfolioRecommender = EnvUtils.getInstance('portfolioRecommender')
+
+        this.accountSelectionContext = undefined
+
+        this.chatVersion = undefined
+
+        this.llmService = await EnvUtils.getInstance('llmService')
+
+        await this.initializeContext()
+
+        await this.reset()
+    }
+
+    async initializeContext() {
+        if (!this.context) {
+            return
+        }
+
+        // Fonte da identidade/versão: o REGISTRO da conversa quando presente
+        // (conversa como recurso provisionado); senão, a string contextId
+        // (compatibilidade com o modelo antigo derivado de headers).
+        let mode, account, userProfileId, version
+        const conv = this.context.conversation
+        if (conv) {
+            mode = conv.owner?.mode
+            account = conv.owner?.account
+            userProfileId = conv.owner?.userProfileId
+            version = conv.version
+        } else {
+            const contextId = this.context.contextId
+            if (contextId.startsWith('admin:')) {
+                mode = 'admin'
+                userProfileId = contextId.substring(6).split(':')[0]
+            } else if (contextId.startsWith('digital:')) {
+                mode = 'digital'
+                account = contextId.substring(8).split(':')[0]
+            }
+            const vmatch = contextId.match(/(?:^|:)v=([^:]+)/)
+            if (vmatch) version = vmatch[1]
+        }
+
+        if (mode === 'admin') {
+            const session = await this.accountService.getSessionAdmin(userProfileId)
+            this.headers = {
+                'app_origin': 'admin',
+                'access_token': session?.accessToken
+            }
+            this.isAdminMode = true
+            this.isDigitalMode = false
+
+        } else if (mode === 'digital') {
+            const session = await this.accountService.getSessionDigital(account)
+            this.headers = {
+                'app_origin': 'digital',
+                'access_token': session?.accessToken
+            }
+            this.isAdminMode = false
+            this.isDigitalMode = true
+
+            const accountData = await this.accountService.getAccount(account, { headers: this.headers })
+            this.selectedAccount = accountData?.account
+            this.selectedClientDocument = accountData?.document
+            this.selectedClientName = accountData?.clientName
+        }
+
+        if (version && Utils.isValidVersion(version)) {
+            this.chatVersion = version
+        }
+    }
+
+    isCommandAvailable(method) {
+        if (!this.chatVersion) return true                          // sem versão do chat => latest
+        const commandVersion = this[method]?.version ?? '1.0.0'     // sem metadata => baseline
+        return Utils.compareVersions(commandVersion, this.chatVersion) <= 0
+    }
+
+    async reset() {
+
+        this.outputCard = undefined
+
+        if (this.isAdminMode) {
+            this.selectedAccount = undefined
+            this.selectedClientDocument = undefined
+            this.selectedClientName = undefined
+        }
+
+        this.selectedSymbol = undefined
+        this.selectedSecurityDescription = undefined
+        this.selectedOrderId = undefined
+        this.selectedRequestId = undefined
+        this.selectedRequestType = undefined
+        this.selectedRequestSide = undefined
+        this.selectedRequestStatus = undefined
+
+        this.accountContexts = {}
+        this.validateSelectedRequest = undefined
+
+        this.queryAccountCommand = undefined
+        this.querySymbolCommand = undefined
+        this.portfolioRecommendationSellSymbol = undefined
+    }
+
+    async onBeforeProcessMessage(msg) {
+
+        this.outputCard = undefined
+    }
+
+    async onBeforeProcessCommands(commands, results) {
+
+        this.validateSelectedRequest = undefined
+    }
+
+    async onAfterProcessCommands(commands, results) {
+
+        const request = this.getSelectedRequest(false)
+        let isComplete = false
+
+        if (request && this.validateSelectedRequest) {
+
+            const validation = this.validateRequestStatus()
+            results.push(validation)
+
+            isComplete = validation?.requestStatus?.isComplete
+        }
+
+        if (isComplete) {
+            const context = this.getAccountContext()
+
+            // seleciona a próxima boleta pendente da conta, se houver — ordem de criação
+            if (context) {
+                const pending = Object.values(context.requests)
+                    .filter(r => r.requestId !== context.selectedRequestId)
+                    .filter(r => !this.validateRequestStatus({ request: r })?.requestStatus?.isComplete)
+                    .sort((a, b) => (a.selectedTime || 0) - (b.selectedTime || 0))
+
+                if (pending.length) {
+                    const next = pending[0]
+
+                    context.selectedRequestId = next.requestId
+                    next.selectedTime = nowTick()
+
+                    if (next.symbol && next.symbol !== this.selectedSymbol) {
+                        results.push({ type: 'selectSymbol', symbol: next.symbol, instruction: `selecionando ativo ${next.symbol} para próxima boleta pendente` })
+                        this.selectedSymbol = next.symbol
+                    }
+
+                    this.outputCard = { type: 'requests' }
+                }
+            }
+        }
+
+        await this.updateMemory()
+    }
+
+    async updateMemory() {
+
+        if (this.isAdminMode) {
+            const account = await this.accountService.getAccount(this.selectedAccount, { headers: this.headers })
+            this.selectedClientDocument = account?.document
+            this.selectedClientName = account?.clientName
+        }
+
+        const security = await this.marketDataService.getSecurity(this.selectedSymbol)
+        this.selectedSecurityDescription = security?.description
+
+        const context = this.getAccountContext(true)
+
+        const orderId = context?.selectedOrderId
+        const order = context?.orders?.[orderId]
+        this.selectedOrderId = order?.orderId
+
+        const requestId = context?.selectedRequestId
+        const request = context?.requests?.[requestId]
+        this.selectedRequestId = request?.requestId
+        this.selectedRequestType = request?.requestType
+        this.selectedRequestSide = request?.side
+        this.selectedRequestStatus = request?.isIncomplete ? 'COMPLETE' : 'PENDING'
+    }
+
+    async sendEvent({ type, eventType }) {
+
+        switch (eventType) {
+            case 'ORDER_SENT': return await this.onEventOrderSent()
+            case 'ORDER_CANCELED': return await this.onEventOrderCanceled()
+        }
+    }
+
+    async onEventOrderSent() {
+
+        const account = this.selectedAccount
+        delete this.accountContexts[account]
+
+        await Utils.sleep(5000)
+
+        if (this.selectedAccount != account) {
+            return
+        }
+
+        this.loadOrders()
+    }
+
+    async onEventOrderCanceled() {
+
+        const account = this.selectedAccount
+        delete this.accountContexts[account]
+    }
+
+    async resolveQuerySymbolSelection({ type, symbol }) {
+
+        let res = undefined
+
+        if (type == 'selectSymbol' || type == 'querySymbol') {
+            if (!symbol) {
+                return
+            }
+            res = await this.querySymbol({ type: 'querySymbol', symbol })
+        } else if (type == 'notResolved') {
+            return AgentRuntime.instruction('querySymbol', 'informe que não foi possível identificar o ativo para consulta')
+        }
+
+        return res
+    }
+
+    async resolveSymbolSelection({ type, symbol }) {
+
+        let res = undefined
+
+        if (type == 'selectSymbol') {
+            res = await this.selectSymbol({ type: 'selectSymbol', symbol })
+        }
+
+        return res
+    }
+
+    async resolvePortfolioRecommendationBuy({ type, symbol }) {
+
+        // usuário escolheu o ativo de COMPRA da lista de alternativas apresentadas →
+        // segue para a geração do par de boletas (venda da posição → compra do escolhido)
+        if (type == 'selectSymbol' && symbol) {
+
+            const symbolSell = this.portfolioRecommendationSellSymbol
+            this.portfolioRecommendationSellSymbol = undefined
+
+            return await this.executePortfolioRecommendation({
+                type: 'executePortfolioRecommendation',
+                symbolSell,
+                symbolBuy: symbol
+            })
+        }
+
+        // fluxo abandonado (nenhum comando resolveu) → limpa o contexto pendente
+        if (type == 'notResolved') {
+            this.portfolioRecommendationSellSymbol = undefined
+        }
+
+        // qualquer outra intenção → não resolve; deixa o fluxo normal seguir
+        return undefined
+    }
+
+    async resolveTopPicksSector({ type, symbol, sector }) {
+
+        let res = undefined
+
+        if (type == 'getTopPicks') {
+            res = await this.getTopPicks({ type: 'getTopPicks', symbol, sector })
+        }
+
+        return res
+    }
+
+    async resolveQueryAccountSelection({ type, accountId }) {
+
+        let res = undefined
+
+        if (type == 'selectAccount' || type == 'queryAccount') {
+            if (!accountId) {
+                return
+            }
+            res = await this.queryAccount({ type: 'queryAccount', accountId })
+        } else if (type == 'notResolved') {
+            return AgentRuntime.instruction('queryAccount', 'informe que não foi possível identificar a conta para consulta')
+        }
+
+        return res
+    }
+
+    sanitizeAccountId(accountId) {
+
+        if (accountId === undefined || accountId === null) {
+            return accountId
+        }
+
+        let value = String(accountId).trim()
+        if (!value) {
+            return value
+        }
+
+        const normalized = this.normalizeText(value)
+        const hasDocumentLiteral = /\b(DOCUMENTO|DOCUMENT|DOC|CPF|CNPJ|RG|RNE|PASSAPORTE|PASSPORT)\b/.test(normalized)
+
+        if (!hasDocumentLiteral) {
+            return value
+        }
+
+        value = value
+            .replace(/\b(documento|document|doc|cpf|cnpj|rg|rne|passaporte|passport)\b/gi, ' ')
+            .replace(/[:\-]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+
+        // Se havia marcador de documento e existem dígitos, prioriza apenas os dígitos.
+        const digits = value.replace(/\D/g, '')
+        if (digits) {
+            return digits
+        }
+
+        return value
+    }
+
+    normalizeText(text) {
+        return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim()
+    }
+
+    async resolveAccountChange({ type, accountId }) {
+
+        let res = undefined
+
+        if (type == 'selectAccount') {
+            await this.cancelRequest({ type: 'cancelRequest' })
+            res = await this.selectAccount({ type: 'selectAccount', accountId })
+        }
+
+        return res
+    }
+
+    // async resolveAccountSelection({ type, accountId }) {
+
+    //     const isNumber = /^\d+$/.test(accountId)
+
+    //     // complemento de nome: tenta combinar com busca anterior
+    //     if (!isNumber && this._lastAccountSearch && accountId !== this._lastAccountSearch) {
+    //         const combined = `${this._lastAccountSearch} ${accountId}`.trim()
+    //         const matches  = await this.accountService.findAccounts(combined)
+    //         if (matches?.length > 0) {
+    //             this._lastAccountSearch = undefined
+    //             return await this.selectAccount({ type: 'selectAccount', accountId: combined })
+    //         }
+    //     }
+
+    //     this._lastAccountSearch = undefined
+    //     return await this.selectAccount({ type: 'selectAccount', accountId })
+    // }
+
+    async resolveAccountSelection({ type, accountId, showMoreOptions, optionIndex }) {
+
+        let res = undefined
+
+        if (type == 'selectAccount') {
+            res = await this.selectAccount({ type: 'selectAccount', accountId, showMoreOptions, optionIndex })
+        }
+
+        return res
+    }
+
+    getAccountContext(acceptTemp = false) {
+
+        let selectedAccount = this.selectedAccount
+
+        if (!selectedAccount) {
+            if (!acceptTemp) {
+                return undefined
+            }
+            selectedAccount = 'temp'
+        }
+
+        let context = this.accountContexts[selectedAccount]
+        if (!context) {
+            context = {
+                account: selectedAccount,
+                selectedOrderId: undefined,
+                selectedRequestId: undefined,
+                orders: undefined,
+                requests: {}
+            }
+            this.accountContexts[selectedAccount] = context
+        }
+
+        return context
+    }
+
+    getSelectedRequest(createIfNull = false) {
+
+        const accountContext = this.getAccountContext(true)
+
+        const createNew = createIfNull === 'new'
+
+        let request = accountContext.requests[accountContext.selectedRequestId]
+        if (createNew && !request?.isNew) {
+            accountContext.selectedRequestId = undefined
+        }
+
+        request = accountContext.requests[accountContext.selectedRequestId]
+        if (!request) {
+            if (!createIfNull) {
+                return undefined
+            }
+
+            const requestId = Utils.getRandomToken(16)
+            request = {
+                requestId,
+                requestType: 'C',
+                orderId: undefined,
+                account: this.selectedAccount,
+                symbol: this.selectedSymbol,
+                side: undefined,
+                quantity: undefined,
+                quantityMin: undefined,
+                quantityDisplay: undefined,
+                priceType: 'M',
+                priceLimit: undefined,
+                priceTrigger: undefined,
+                expireType: 'DAY',
+                expireTime: undefined,
+                selectedTime: undefined,
+                isNew: true
+            }
+            accountContext.requests[requestId] = request
+            accountContext.selectedRequestId = requestId
+            request.selectedTime = nowTick()
+        }
+
+        return request
+    }
+
+    resolveReusableRequest(symbol, requestType) {
+
+        const accountContext = this.getAccountContext(true)
+
+        // 1) reaproveita a última boleta [C]/[M] do ativo selecionado (nunca [X])
+        if (symbol) {
+            const reusable = Object.values(accountContext.requests)
+                .filter(r => r.symbol === symbol && r.requestType === requestType)
+                .sort((a, b) => (b.selectedTime || 0) - (a.selectedTime || 0))[0]
+
+            if (reusable) {
+                accountContext.selectedRequestId = reusable.requestId
+                reusable.selectedTime = nowTick()
+                return reusable
+            }
+        }
+
+        // 2) reaproveita a boleta em foco apenas se ainda estiver em branco (isNew) ou sem ativo vinculado
+        const selected = accountContext.requests[accountContext.selectedRequestId]
+        if (selected && (selected.isNew || !selected.symbol)) {
+            return selected
+        }
+
+        // 3) nenhuma boleta reaproveitável — cria uma nova (não sobrescreve boleta de outro ativo)
+        return this.getSelectedRequest('new')
+    }
+
+    getEditingRequests() {
+        const requests = []
+        for (const context of Object.values(this.accountContexts)) {
+            for (const request of Object.values(context.requests)) {
+                if (request.requestType != 'X') {
+                    requests.push(request)
+                }
+            }
+        }
+        return requests
+    }
+
+    buildRequest({ symbol, side, quantity, volume, priceType = 'M', expireType = 'DAY' }) {
+        const requestId = Utils.getRandomToken(16)
+        return {
+            requestId,
+            requestType: 'C',
+            orderId: undefined,
+            account: this.selectedAccount,
+            symbol,
+            side,
+            quantity: quantity ?? undefined,
+            volume: volume ?? undefined,
+            quantityMin: undefined,
+            quantityDisplay: undefined,
+            priceType,
+            priceLimit: undefined,
+            priceTrigger: undefined,
+            expireType,
+            expireTime: undefined,
+            selectedTime: nowTick(),
+            isNew: false
+        }
+    }
+
+    async updateTempRequest() {
+
+        const accountContext = this.getAccountContext()
+        if (!accountContext) {
+            return
+        }
+
+        const tempContext = this.accountContexts['temp']
+        if (!tempContext) {
+            return
+        }
+
+        delete this.accountContexts['temp']
+
+        let selectedRequest = accountContext.requests[accountContext.selectedRequestId]
+
+        for (const [requestId, request] of Object.entries(tempContext.requests)) {
+            if (request.selectedTime > (selectedRequest?.selectedTime ?? 0)) {
+                selectedRequest = request
+            }
+            request.account = this.selectedAccount
+            accountContext.requests[requestId] = request
+        }
+
+        accountContext.selectedRequestId = selectedRequest?.requestId
+
+        this.validateSelectedRequest = true
+        this.outputCard = { type: 'requests' }
+    }
+
+    async resolveRequestCancelAccount({ type, accountId }) {
+
+        let res = undefined
+
+        if (type == 'selectAccount') {
+            await this.cancelRequest({ type: 'cancelRequest' })
+            res = await this.selectAccount({ type: 'selectAccount', accountId })
+        }
+
+        return res
+    }
+
+    async resolveRequestCancelType({ type, requestType, newRequest }) {
+
+        let res = undefined
+
+        if (type == 'setRequestType') {
+            await this.cancelRequest({ type: 'cancelRequest' })
+            res = await this.setRequestType({ type: 'setRequestType', requestType, newRequest })
+        }
+
+        return res
+    }
+
+    syncSelectedRequestToList() {
+
+        const requests = this.selectedRequests
+        if (!requests?.length) {
+            return
+        }
+
+        // já selecionada e presente na lista → nada a fazer
+        if (this.selectedRequestId && requests.some(r => r.requestId === this.selectedRequestId)) {
+            return
+        }
+
+        const first = requests[0]
+
+        // aponta a seleção para a primeira boleta, no contexto da conta que a contém
+        const context = Object.values(this.accountContexts).find(c => c.requests[first.requestId])
+        if (context) {
+            context.selectedRequestId = first.requestId
+            first.selectedTime = nowTick()
+        }
+
+        this.selectedRequestId = first.requestId
+    }
+
+    applyQuantity(request, quantity, offsetType, offset) {
+
+        let value = quantity
+
+        if (!value && offsetType && offset !== undefined) {
+            const base = request.quantity || 0
+            if (!base) return false   // sem base própria — pula esta boleta
+
+            if (offsetType == 'U') value = base + offset
+            else if (offsetType == 'P') value = base * (1 + offset / 100)
+
+            value = Math.max(0, Math.round(value))
+        }
+
+        if (!value || value <= 0) return false
+
+        request.quantity = value
+        request.volume = undefined
+        request.isNew = false
+
+        return true
+    }
+
+    applyVolume(request, volume, offsetType, offset) {
+
+        let value = volume
+
+        if (!value && offsetType && offset !== undefined) {
+            const base = request.volume || 0
+            if (!base) return false
+
+            if (offsetType === 'U') value = base + offset
+            else if (offsetType === 'P') value = base * (1 + offset / 100)
+
+            value = Math.max(0, Math.round(value * 100) / 100)
+        }
+
+        if (!value || value <= 0) return false
+
+        request.volume = value
+        request.quantity = undefined
+
+        if (!request.priceType && !request.priceLimit) {
+            request.priceType = 'M'
+            request.priceLimit = undefined
+        }
+
+        request.isNew = false
+
+        return true
+    }
+
+    async applyPriceType(request, priceType) {
+
+        const oldPriceType = request.priceType
+
+        request.priceType = priceType
+
+        if (priceType == 'M') {
+            request.priceLimit = undefined
+        } else if (priceType == 'L' && oldPriceType == 'M') {
+            // cotação por ativo — cada boleta usa o preço do SEU símbolo
+            const quote = await this.marketDataService.getQuote(request.symbol)
+            if (quote) {
+                request.priceLimit = request.side == 'B' ? quote.askPrice : quote.bidPrice
+            }
+        }
+
+        request.isNew = false
+    }
+
+    async applyPriceLimit(request, priceLimit, reference, offset, offsetType) {
+
+        let value = priceLimit
+
+        if (!value) {
+
+            // referência [T] ao preço GATILHO (stop) da própria boleta — não depende de cotação de mercado
+            if (reference == 'T') {
+                if (!request.priceTrigger) return false   // sem gatilho definido — não há referência
+                value = request.priceTrigger
+            } else {
+                const quote = await this.marketDataService.getQuote(request.symbol)
+                if (!quote) return false   // sem cotação do ativo — não há referência
+
+                value = quote.lastPrice
+                if (reference == 'B') value = quote.bidPrice
+                else if (reference == 'A') value = quote.askPrice
+                else if (reference == 'R') value = request.priceLimit || quote.lastPrice
+            }
+
+            let effectiveOffset = offset
+            if (reference == 'T' && request.side) {
+                effectiveOffset = Math.abs(offset) * (request.side == 'B' ? 1 : -1)
+            }
+
+            if (offsetType == 'P') value = value * (1 + effectiveOffset / 100)
+            else if (offsetType == 'U') value = value + effectiveOffset
+            else if (offsetType == 'T') {
+                const security = await this.marketDataService.getSecurity(request.symbol)
+                value = value + effectiveOffset * (security?.minPriceIncrement || 0)
+            }
+        }
+
+        request.priceLimit = value
+        request.priceType = 'L'
+        request.isNew = false
+
+        return true
+    }
+
+    async applyPriceTrigger(request, priceTrigger, reference, offset, offsetType) {
+
+        let value = priceTrigger
+
+        if (!value) {
+            const quote = await this.marketDataService.getQuote(request.symbol)
+            if (!quote) return false   // sem cotação do ativo — não há referência
+
+            value = quote.lastPrice
+            if (reference == 'B') value = quote.bidPrice
+            else if (reference == 'A') value = quote.askPrice
+            else if (reference == 'R') value = request.priceTrigger || quote.lastPrice
+
+            if (offsetType == 'P') value = value * (1 + offset / 100)
+            else if (offsetType == 'U') value = value + offset
+            else if (offsetType == 'T') {
+                const security = await this.marketDataService.getSecurity(request.symbol)
+                value = value + offset * (security?.minPriceIncrement || 0)
+            }
+        }
+
+        request.priceTrigger = value
+        request.isNew = false
+
+        return true
+    }
+
+    applyExpireType(request, expireType) {
+
+        if (expireType === 'GTD' && !request.expireTime) {
+            const today = new Date()
+            today.setHours(23, 59, 59, 0)
+            request.expireTime = today.toISOString().split('T')[0]
+        }
+
+        request.expireType = expireType
+
+        if (request.expireType !== 'GTD') {
+            request.expireTime = undefined
+        }
+
+        if (request.expireType !== 'IOC') {
+            request.quantityMin = undefined
+        }
+
+        request.isNew = false
+    }
+
+    applyExpireTime(request, expireTime) {
+
+        request.expireType = 'GTD'
+        request.expireTime = expireTime
+
+        request.isNew = false
+    }
+
+    getAllRequests(account) {
+
+        const collect = context =>
+            context ? Object.values(context.requests) : []
+
+        const allRequests = account
+            ? collect(this.accountContexts[account])
+            : Object.values(this.accountContexts).flatMap(collect)
+
+        return allRequests.sort((a, b) => (b.selectedTime || 0) - (a.selectedTime || 0))
+    }
+
+    async getOrderStatusText(order) {
+
+        if (order.orderStatus === 'XR') {
+            // rejeição: o motivo técnico precisa ser traduzido para linguagem de negócio via LLM
+            const executed = (order.filledQuantity || 0) > 0
+                ? `Já houve execução: ${order.filledQuantity} cotas, volume de ${order.filledVolume ?? 0} e preço médio de ${order.filledAveragePrice ?? 0}. Preserve essa informação. `
+                : ''
+
+            const prompt =
+                `A ordem do ativo ${order.symbol} (${order.side === 'B' ? 'compra' : 'venda'}) foi REJEITADA. ${executed}` +
+                `Traduza o motivo técnico abaixo para uma explicação curta, natural e clara em português, como se falasse com um cliente. ` +
+                `NÃO copie o texto literal. NÃO use termos técnicos, nomes de campos, código ou os caracteres [ ] { } ( ) | / " nem a palavra "null". ` +
+                `Se indicar campo ausente ou inválido, descreva em linguagem de negócio — ex.: "a quantidade da ordem não foi informada", "o preço limite não foi definido". ` +
+                `Motivo técnico: "${order.statusText || 'não informado'}".`
+
+            return await this.llmService.execute(prompt, 'text')
+        }
+
+        const parts = []
+
+        if ((order.filledQuantity || 0) > 0) {
+            parts.push(`a ordem já teve execução: quantidade executada de ${order.filledQuantity}, volume financeiro executado de ${order.filledVolume ?? 0} e preço médio executado de ${order.filledAveragePrice ?? 0}.`)
+        }
+
+        switch (order.orderStatus) {
+            case 'F':
+                parts.push('a ordem foi executada por completo e está finalizada.')
+                break
+            case 'X':
+                parts.push('a ordem está cancelada.')
+                break
+            case 'XP':
+                parts.push('a ordem expirou.')
+                break
+            case 'XR':
+                parts.push(`a ordem foi rejeitada. Motivo: ${order.statusText || 'não informado'}.`)
+                break
+            case 'N':
+                parts.push('a ordem está aberta e registrada no book, aguardando execução.')
+                break
+            default:
+                if (order.orderStatus) {
+                    parts.push(`status atual da ordem: ${order.orderStatus}.`)
+                } else {
+                    parts.push('status atual da ordem indisponível.')
+                }
+                break
+        }
+
+        return parts.join(' ')
+    }
+
+    async loadOrders(accountContext) {
+
+        if (!accountContext) {
+            accountContext = await this.getAccountContext()
+            if (!accountContext) {
+                return
+            }
+        }
+
+        let orders = accountContext.orders
+
+        if (!orders) {
+            orders = await this.orderService.getOpenOrders(accountContext.account)
+            orders = orders.sort((a, b) => new Date(a.creationTime).getTime() - new Date(b.creationTime).getTime())
+            orders = orders.map((o) => {
+
+                let priceType = o.priceType
+                let priceLimit = o.priceLimit
+                let priceTrigger = undefined
+                if (o.priceTriggerStop) {
+                    priceTrigger = o.priceTriggerStop
+                    priceLimit = o.priceLimitStop
+                }
+                if (!priceLimit) {
+                    priceType = 'M'
+                }
+
+                return {
+                    orderId: o.orderId,
+                    account: o.account,
+                    symbol: o.symbol,
+                    side: o.side,
+
+                    quantity: o.quantity,
+                    quantityMin: o.quantityMin,
+                    quantityDisplay: o.quantityDisplay,
+                    priceType,
+                    priceLimit,
+                    priceTrigger,
+
+                    expireType: o.expireType,
+                    expireTime: o.expireTime,
+                    creationTime: o.creationTime,
+
+                    orderStatus: o.orderStatus,
+                    statusText: o.statusText,
+                    requestType: o.requestType,
+                    requestStatus: o.requestStatus,
+
+                    pendingQuantity: o.pendingQuantity,
+                    filledQuantity: o.filledQuantity,
+                    filledAveragePrice: o.filledAveragePrice,
+                    filledVolume: o.filledVolume,
+                    pendingVolume: o.pendingVolume,
+
+                    selectedTime: nowTick()
+                }
+            })
+            const entries = orders.map(o => [o.orderId, o])
+            accountContext.orders = Object.fromEntries(entries)
+        }
+
+        orders = Object.values(orders).sort((a, b) => (b.selectedTime || 0) - (a.selectedTime || 0))
+
+        if (!this.selectedOrderId) {
+            if (this.selectedSymbol) {
+                let sort = false
+                for (let order of orders) {
+                    if (order.symbol === this.selectedSymbol) {
+                        order.selectedTime = nowTick()
+                        accountContext.selectedOrderId = order.orderId
+                        this.selectedOrderId = accountContext.selectedOrderId
+                        sort = true
+                        break
+                    }
+                }
+
+                if (sort) {
+                    orders = Object.values(orders).sort((a, b) => (b.selectedTime || 0) - (a.selectedTime || 0))
+                }
+            } else if (orders.length) {
+                accountContext.selectedOrderId = orders[0].orderId
+                this.selectedOrderId = accountContext.selectedOrderId
+                await this.selectSymbol({ type: 'selectSymbol', symbol: orders[0].symbol })
+            }
+        }
+
+        return orders
+    }
+
+    async getDataAccountSelection() {
+
+        let output = undefined
+
+        const options = this.outputCard?.options
+        if (options?.length) {
+            output = {
+                search: this.outputCard.search,
+                results: options.map(o => ({
+                    account: o.account,
+                    clientName: o.clientName,
+                    institution: o.institution,
+                    segment: o.segment
+                }))
+            }
+        }
+
+        return {
+            output_type: 'selection_card@account',
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataSymbolSelection() {
+
+        let output = undefined
+
+        const options = this.outputCard?.options
+        if (options?.length) {
+            output = {
+                search: this.outputCard.search,
+                results: options.map(o => ({
+                    symbol: o.symbol,
+                    description: o.description
+                }))
+            }
+        }
+
+        return {
+            output_type: 'selection_card@symbol',
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getMessage() {
+
+        if (this.outputCard?.type == 'account_selection') {
+            return `Encontrei as seguintes contas para "${this.outputCard.search}".`
+        }
+
+        if (this.outputCard?.type == 'symbol_selection') {
+            return `Encontrei os seguintes ativos para "${this.outputCard.search}".`
+        }
+
+        if (this.outputCard?.type == 'top_picks_sectors') {
+            return `Encontrei os seguintes setores para consulta de Top Picks de acordo com o time de analistas do time de Research:`
+        }
+
+        if (this.outputCard?.type == 'top_picks') {
+            const sector = this.outputCard.sector
+            if (sector) {
+                return `Aqui estão as Top-Picks para o setor ${sector.sector}, de acordo com o time de analistas do time de Research:`
+            }
+            return `Aqui estão as Top-Picks, de acordo com o time de analistas do time de Research:`
+        }
+
+        if (this.outputCard?.type == 'fundamentals_recommendation') {
+            return `Aqui está o resumo de ${this.selectedSymbol}, de acordo com o time de analistas do time de Research:`
+        }
+
+        if (this.outputCard?.type == 'fundamentals_summary') {
+            return `Aqui está a tese de ${this.selectedSymbol}, de acordo com o time de analistas do time de Research:`
+        }
+
+        if (this.outputCard?.type == 'fundamentals') {
+            return `Aqui estão os principais indicadores da análise fundamentalista de ${this.selectedSymbol}, de acordo com o time de analistas do time de Research:`
+        }
+
+        if (this.outputCard?.type == 'security') {
+            return `Aqui estão as principais características de ${this.selectedSymbol}:`
+        }
+
+        if (this.outputCard?.type == 'quote') {
+            return `Aqui estão os valores atualizados de ${this.selectedSymbol}:`
+        }
+
+        if (this.outputCard?.type == 'lending') {
+            return `Aqui está a taxa de aluguel de ${this.selectedSymbol}:`
+        }
+
+        if (this.outputCard?.type == 'lending_unavailable') {
+            return `Não foi possível obter a taxa de aluguel de ${this.selectedSymbol} no momento. Por favor, entre em contato com a mesa de operações.`
+        }
+
+        if (this.outputCard?.type == 'portfolio_analysis') {
+            return 'De acordo com o conteúdo do time de Research, esta é uma possível leitura para a carteira selecionada:'
+        }
+
+        if (this.outputCard?.type == 'portfolio_recommendation_sell') {
+            return 'Considerando as análises do time de Research, essas são as posições sem alinhamento com as recomendações:'
+        }
+
+        if (this.outputCard?.type == 'portfolio_recommendation_buy') {
+            return `Considerando as análises do time de Research, estes são os ativos com recomendação de compra para o mesmo setor de ${this.outputCard.symbol}:`
+        }
+
+        if (this.outputCard?.type == 'financial') {
+            return `Aqui está um resumo financeiro da conta ${this.selectedAccount}:`
+        }
+
+        if (this.outputCard?.type == 'position_summary') {
+            return `Aqui está um resumo de posição da conta ${this.selectedAccount}:`
+        }
+
+        if (this.outputCard?.type == 'position') {
+            return `Aqui está a posição de ${this.selectedSymbol} da conta ${this.selectedAccount}:`
+        }
+
+        if (this.outputCard?.type == 'orders') {
+            if (this.outputCard.statusText) {
+                return this.outputCard.statusText
+            }
+            return `Aqui estão as ordens vigentes da conta ${this.selectedAccount}:`
+        }
+
+        if (this.outputCard?.type == 'requests') {
+
+            const allRequests = this.getAllRequests()
+
+            let validation = this.validateRequestStatus()
+            if (validation?.requestStatus?.isComplete) {
+                validation = undefined
+            }
+
+            if (!validation) {
+                for (const request of allRequests) {
+                    let rvalidation = await this.validateRequestStatus({ request })
+                    if (!rvalidation?.requestStatus?.isComplete) {
+                        validation = rvalidation
+                        break
+                    }
+                }
+            }
+
+            if (validation?.requestStatus) {
+
+                let pending = []
+
+                for (let field of validation.requestStatus.pendingFields) {
+                    switch (field) {
+                        case 'requestType': pending.push('- tipo de ordem'); break
+                        case 'account': pending.push('- número da conta'); break
+                        case 'symbol': pending.push('- código do ativo'); break
+                        case 'side': pending.push('- direção (compra ou venda)'); break
+                        case 'quantity_or_volume': pending.push('- quantidade ou volume financeiro'); break
+                        case 'priceType_or_priceLimit': pending.push('- preço mercado ou limite'); break
+                        case 'expireType_or_expireTime': pending.push('- tipo ou data de expieração'); break
+                        default: pending.push(field)
+                    }
+                }
+
+                pending = pending.join('\n')
+
+                let orderSpec = ['a ordem']
+                if (allRequests.length > 1) {
+                    const request = this.getSelectedRequest()
+                    if (request?.side) {
+                        orderSpec.push(request.side === 'B' ? 'de compra' : 'de venda')
+                    }
+                    if (request?.symbol) {
+                        orderSpec.push(`de ${request.symbol}`)
+                    }
+                }
+                orderSpec = orderSpec.join(' ')
+
+                return `Para completar ${orderSpec}, preciso das seguintes informações:\n${pending}`
+            }
+
+            if (allRequests.length > 1) {
+                return `Ok, aqui estão as suas ordens. Confira os dados atentamente antes de enviá-las.`
+            } else if (allRequests.length > 0) {
+                return `Ok, aqui está a sua ordem. Confira os dados atentamente antes de enviá-la.`
+            }
+        }
+
+        return undefined
+    }
+
+    async getData() {
+
+        if (this.outputCard?.type == 'account_selection') {
+            return await this.getDataAccountSelection()
+        }
+
+        if (this.outputCard?.type == 'symbol_selection') {
+            return await this.getDataSymbolSelection()
+        }
+
+        if (this.outputCard?.type == 'top_picks_sectors') {
+            return await this.getDataTopPicksSectors()
+        }
+
+        if (this.outputCard?.type == 'top_picks') {
+            return await this.getDataTopPicks()
+        }
+
+        if (this.outputCard?.type == 'fundamentals_recommendation') {
+            return await this.getDataFundamentalsRecommendation()
+        }
+
+        if (this.outputCard?.type == 'fundamentals_summary') {
+            return await this.getDataFundamentalsSummary()
+        }
+
+        if (this.outputCard?.type == 'fundamentals') {
+            return await this.getDataFundamentals()
+        }
+
+        if (this.outputCard?.type == 'orders') {
+            return await this.getDataOrders()
+        }
+
+        if (this.outputCard?.type == 'security') {
+            return await this.getDataSecurity()
+        }
+
+        if (this.outputCard?.type == 'lending') {
+            return await this.getDataLending()
+        }
+
+        if (this.outputCard?.type == 'quote') {
+            return await this.getDataQuote()
+        }
+
+        if (this.outputCard?.type == 'portfolio_analysis') {
+            return await this.getDataPortfolioAnalysis()
+        }
+
+        if (this.outputCard?.type == 'portfolio_recommendation_sell') {
+            return await this.getDataPortfolioRecommendationSell()
+        }
+
+        if (this.outputCard?.type == 'portfolio_recommendation_buy') {
+            return await this.getDataPortfolioRecommendationBuy()
+        }
+
+        if (this.outputCard?.type == 'financial') {
+            return await this.getDataFinancial()
+        }
+
+        if (this.outputCard?.type == 'position_summary') {
+            return await this.getDataPositionSummary()
+        }
+
+        if (this.outputCard?.type == 'position') {
+            return await this.getDataPosition()
+        }
+
+        if (this.outputCard?.type == 'requests') {
+            return this.getDataRequests()
+        }
+    }
+
+    async getDataFinancial() {
+
+        const data = this.outputCard?.data ?? {}
+
+        const fmtMoney = v => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+
+        const allFields = [
+            { key: 'balanceD0', name: 'Saldo Inicial (D0)', format: fmtMoney },
+            { key: 'balanceProjectedD1', name: 'Saldo Projetado (D+1)', format: fmtMoney },
+            { key: 'balanceProjectedD2', name: 'Saldo Projetado (D+2)', format: fmtMoney },
+            { key: 'balanceProjected', name: 'Saldo Projetado', format: fmtMoney },
+            { key: 'availableBalance', name: 'Limite Operacional', format: fmtMoney },
+            { key: 'totalFreeze', name: 'Valores Bloqueados', format: fmtMoney },
+            { key: 'totalEquity', name: 'Patrimônio Consolidado', format: fmtMoney },
+            { key: 'daytradeAllocatedLimit', name: 'Limite Daytrade Alocado', format: fmtMoney },
+            { key: 'daytradeAvailableLimit', name: 'Limite Daytrade Disponível', format: fmtMoney },
+            { key: 'profitDaytrade', name: 'Resultado Daytrade', format: fmtMoney },
+        ]
+
+        // projeta apenas os campos presentes em card.data
+        const visibleFields = allFields.filter(f => data[f.key] !== undefined)
+
+        let output = undefined
+        if (visibleFields.length) {
+            output = {
+                account: this.selectedAccount,
+                properties: visibleFields.map(f => ({
+                    name: f.name,
+                    value: (data[f.key] !== undefined && data[f.key] !== null) ? f.format(data[f.key]) : '-'
+                }))
+            }
+        }
+
+        return {
+            output_type: 'financial_card@summary',
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataPositionSummary() {
+
+        const data = this.outputCard?.data ?? {}
+
+        const fmtMoney = v => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+        const fmtPct = v => `${v > 0 ? '+' : ''}${v.toFixed(2)}%`
+        const fmtInt = v => v.toLocaleString('pt-BR')
+
+        const allFields = [
+            { key: 'positionCount', name: 'Ativos em Carteira', format: fmtInt },
+            { key: 'volume', name: 'Volume Investido', format: fmtMoney },
+            { key: 'profit', name: 'Resultado Acumulado', format: fmtMoney },
+            { key: 'profitPercent', name: 'Resultado Acumulado (%)', format: fmtPct },
+            { key: 'profitD0', name: 'Resultado do Dia', format: fmtMoney },
+            { key: 'profitPercentD0', name: 'Resultado do Dia (%)', format: fmtPct },
+        ]
+
+        // projeta apenas os campos presentes em card.data
+        const visibleFields = allFields.filter(f => data[f.key] !== undefined)
+
+        let output = undefined
+        if (visibleFields.length) {
+            output = {
+                account: this.selectedAccount,
+                properties: visibleFields.map(f => ({
+                    name: f.name,
+                    value: (data[f.key] !== undefined && data[f.key] !== null) ? f.format(data[f.key]) : '-'
+                }))
+            }
+        }
+
+        return {
+            output_type: 'position_card@summary',
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataPosition() {
+
+        const data = this.outputCard?.data ?? {}
+
+        const fmtMoney = v => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+        const fmtShare = v => `R$ ${v.toFixed(2)}`
+        const fmtPct = v => `${v > 0 ? '+' : ''}${v.toFixed(2)}%`
+        // quantidade: inteiro sem casas decimais; fracionário (ex.: cripto) até 8 casas, sem zeros à direita
+        const fmtQty = v => v.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 8 })
+        const fmtText = v => v
+
+        const allFields = [
+
+            { key: 'totalQuantity', name: 'Quantidade Total', format: fmtQty },
+            { key: 'blockedQuantity', name: 'Quantidade Bloqueada', format: fmtQty },
+            { key: 'availableQuantity', name: 'Quantidade Disponível', format: fmtQty },
+            { key: 'quantityD0', name: 'Quantidade (D0)', format: fmtQty },
+            { key: 'quantityProjectedD1', name: 'Quantidade Projetada (D+1)', format: fmtQty },
+            { key: 'quantityProjectedD2', name: 'Quantidade Projetada (D+2)', format: fmtQty },
+
+            { key: 'volume', name: 'Volume Atual', format: fmtMoney },
+            { key: 'investedVolume', name: 'Volume Investido', format: fmtMoney },
+            { key: 'investedVolumeAdjusted', name: 'Volume Investido Ajustado', format: fmtMoney },
+            { key: 'earningsVolume', name: 'Proventos Recebidos', format: fmtMoney },
+
+            { key: 'avgPrice', name: 'Preço Médio', format: fmtShare },
+            { key: 'avgPriceAdjusted', name: 'Preço Médio Ajustado', format: fmtShare },
+
+            { key: 'profit', name: 'Resultado Acumulado', format: fmtMoney },
+            { key: 'profitPercent', name: 'Resultado Acumulado (%)', format: fmtPct },
+            { key: 'profitD0', name: 'Resultado do Dia', format: fmtMoney },
+            { key: 'profitPercentD0', name: 'Resultado do Dia (%)', format: fmtPct },
+
+            { key: 'yieldOnCost', name: 'Yield on Cost (%)', format: fmtPct },
+            { key: 'positionWeight', name: 'Peso na Carteira (%)', format: fmtPct },
+        ]
+
+        // projeta apenas os campos presentes em card.data
+        const visibleFields = allFields.filter(f => data[f.key] !== undefined)
+
+        let output = undefined
+        if (visibleFields.length) {
+            output = {
+                account: this.selectedAccount,
+                symbol: this.selectedSymbol,
+                properties: visibleFields.map(f => ({
+                    name: f.name,
+                    value: (data[f.key] !== undefined && data[f.key] !== null) ? f.format(data[f.key]) : '-'
+                }))
+            }
+        }
+
+        return {
+            output_type: 'position_card@detail',
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataSecurity() {
+
+        const security = await this.marketDataService.getSecurity(this.selectedSymbol)
+        const topPick = await this.marketDataService.getIsTopPick(this.selectedSymbol)
+
+        let filters = undefined
+        if (this.outputCard?.fields instanceof Array) {
+            filters = Object.fromEntries(this.outputCard.fields.map(o => [o, true]))
+        }
+
+        let output = undefined
+        if (security) {
+
+            const allFields = [
+                { key: 'description', name: 'Descrição', format: v => v },
+                { key: 'exchange', name: 'Bolsa', format: v => v },
+                { key: 'securityType', name: 'Tipo', format: v => v },
+                { key: 'lot', name: 'Lote Padrão', format: v => v.toLocaleString('pt-BR') },
+                { key: 'minPriceIncrement', name: 'Variação Mínima', format: v => `R$ ${v.toFixed(2)}` },
+            ]
+
+            const visibleFields = filters
+                ? allFields.filter(f => filters[f.key])
+                : allFields
+
+            output = {
+                symbol: security.symbol,
+                topPick,
+                properties: visibleFields.map(f => ({
+                    name: f.name,
+                    value: (security[f.key] !== undefined && security[f.key] !== null) ? f.format(security[f.key]) : '-'
+                }))
+            }
+        }
+
+        return {
+            output_type: 'content_card@security',
+            output_status: security ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataLending() {
+        const topPick = await this.marketDataService.getIsTopPick(this.selectedSymbol)
+        const fee = this.outputCard?.fee
+
+        let output = undefined
+        if (fee != null) {
+            const feeText = fee.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            output = {
+                symbol: this.selectedSymbol,
+                topPick,
+                properties: [
+                    { name: 'Taxa de aluguel', value: `${feeText}% a.a.` }
+                ]
+            }
+        }
+
+        return {
+            output_type: 'content_card@security',
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataQuote() {
+
+        const security = await this.marketDataService.getSecurity(this.selectedSymbol)
+        const priceUnit = security?.priceUnit
+
+        const quote = await this.marketDataService.getQuote(this.selectedSymbol)
+        const topPick = await this.marketDataService.getIsTopPick(this.selectedSymbol)
+
+        let filters = undefined
+        if (this.outputCard?.fields instanceof Array) {
+            filters = Object.fromEntries(this.outputCard.fields.map(o => [o, true]))
+        }
+
+        const fmtMoney = v => {
+            const [rawUnit, rawPlaces] = String(priceUnit || 'PTS.0').split('.')
+            const unit = (rawUnit || 'PTS').toUpperCase()
+            const parsed = parseInt(rawPlaces, 10)
+            const decimals = Number.isFinite(parsed) ? parsed : 0
+
+            // pontos: número puro, sem símbolo
+            if (unit === 'PTS') {
+                return v.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+            }
+
+            // percentual: número seguido de %
+            if (unit === 'PCT') {
+                return `${v.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}%`
+            }
+
+            // moeda: símbolo da moeda informada (BRL, USD, ...)
+            return v.toLocaleString('pt-BR', {
+                style: 'currency',
+                currency: unit,
+                minimumFractionDigits: decimals,
+                maximumFractionDigits: decimals
+            })
+        }
+
+        let output = undefined
+        if (quote) {
+
+            const allFields = [
+                // { key: 'lastPrice', name: 'Último Preço', format: fmtMoney },
+                // { key: 'changePercent', name: 'Variação', format: v => `${v > 0 ? '+' : ''}${v.toFixed(2)}%` },
+                { key: 'bidPrice', name: 'Compra (Bid)', format: fmtMoney },
+                { key: 'askPrice', name: 'Venda (Ask)', format: fmtMoney },
+            ]
+
+            const visibleFields = filters
+                ? allFields.filter(f => filters[f.key])
+                : allFields
+
+            output = {
+                symbol: quote.symbol,
+                topPick,
+                properties: visibleFields.map(f => ({
+                    name: f.name,
+                    value: (quote[f.key] !== undefined && quote[f.key] !== null) ? f.format(quote[f.key]) : '-'
+                }))
+            }
+        }
+
+        return {
+            output_type: 'content_card@quote',
+            output_status: quote ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataPortfolioAnalysis() {
+
+        const overview = await this.portfolioRecommender.getPortfolioAnalysisOverview(this.selectedAccount)
+
+        return {
+            output_type: 'portfolio_card@overview',
+            output_status: overview ? 'success' : 'not_found',
+            output: overview
+        }
+    }
+
+    async getDataPortfolioRecommendationSell() {
+
+        let output = undefined
+
+        const items = this.outputCard?.data
+        if (items?.length) {
+            output = {
+                positions: items.map(p => ({
+                    sector: p.sector,
+                    symbol: p.symbol,
+                    quantity: p.quantity,
+                    volume: p.volume,
+                    profit: p.profit,
+                    profitPercent: p.profitPercent
+                }))
+            }
+        }
+
+        return {
+            output_type: 'portfolio_card@recommendation_sell',
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataPortfolioRecommendationBuy() {
+
+        let output = undefined
+
+        const items = this.outputCard?.data
+        if (items?.length) {
+            output = {
+                symbol: this.outputCard?.symbol,
+                recommendations: items.map(p => ({
+                    sector: p.sector,
+                    symbol: p.symbol,
+                    topPick: !!p.topPick,
+                    recommendation: p.recommendation,
+                    targetPrice: p.targetPrice,
+                    upside: p.upside
+                }))
+            }
+        }
+
+        return {
+            output_type: 'portfolio_card@recommendation_buy',
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataFundamentals() {
+
+        const fundamentals = await this.marketDataService.getFundamentals(this.selectedSymbol)
+        const topPick = await this.marketDataService.getIsTopPick(this.selectedSymbol)
+
+        let filters = undefined
+        if (this.outputCard?.fields instanceof Array) {
+            filters = Object.fromEntries(this.outputCard.fields.map(o => [o, true]))
+        }
+
+        let output = undefined
+        if (fundamentals) {
+
+            const fmtMoney = v =>
+                v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', notation: 'compact' })
+            const fmtMult = v => `${v.toFixed(2)}x`
+            const fmtPct = v => `${v.toFixed(2)}%`
+            const fmtNum = v => v.toFixed(2)
+            const fmtShare = v => `R$ ${v.toFixed(2)}`
+            const fmtDate = v => new Date(v).toLocaleDateString('pt-BR')
+            const fmtBool = v => v ? 'Sim' : 'Não'
+
+            const allFields = [
+                { key: 'marketCapital', name: 'Market Cap', format: fmtMoney },
+                { key: 'enterpriseValue', name: 'Enterprise Value (EV)', format: fmtMoney },
+
+                { key: 'assets', name: 'Ativo Total', format: fmtMoney },
+                { key: 'equity', name: 'Patrimônio Líquido', format: fmtMoney },
+                { key: 'equityToAssets', name: 'PL / Ativos (%)', format: fmtPct },
+                { key: 'currentAssets', name: 'Ativo Circulante', format: fmtMoney },
+                { key: 'netCurrentAssets', name: 'Ativo Circ. Líquido', format: fmtMoney },
+                { key: 'liabilities', name: 'Passivo Total', format: fmtMoney },
+                { key: 'currentLiabilities', name: 'Passivo Circulante', format: fmtMoney },
+                { key: 'currentRatio', name: 'Liquidez Corrente', format: fmtNum },
+
+                { key: 'grossDebt', name: 'Dívida Bruta', format: fmtMoney },
+                { key: 'grossDebtToEquity', name: 'Dív. Bruta / PL', format: fmtMult },
+                { key: 'netDebt', name: 'Dívida Líquida', format: fmtMoney },
+                { key: 'netDebtToEbit', name: 'Dív. Líq. / EBIT', format: fmtMult },
+                { key: 'netDebtToEbitda', name: 'Dív. Líq. / EBITDA', format: fmtMult },
+                { key: 'netDebtToEquity', name: 'Dív. Líq. / PL', format: fmtMult },
+
+                { key: 'assetTurnover', name: 'Giro do Ativo', format: fmtMult },
+                { key: 'capitalTurnover', name: 'Giro do Capital', format: fmtMult },
+                { key: 'priceToCapitalTurnover', name: 'Preço / Giro do Capital', format: fmtMult },
+
+                { key: 'netRevenue', name: 'Receita Líquida', format: fmtMoney },
+                { key: 'ebit', name: 'EBIT', format: fmtMoney },
+                { key: 'ebitda', name: 'EBITDA', format: fmtMoney },
+                { key: 'netIncome', name: 'Lucro Líquido', format: fmtMoney },
+
+                { key: 'grossMargin', name: 'Margem Bruta (%)', format: fmtPct },
+                { key: 'ebitMargin', name: 'Margem EBIT (%)', format: fmtPct },
+                { key: 'ebitdaMargin', name: 'Margem EBITDA (%)', format: fmtPct },
+                { key: 'netMargin', name: 'Margem Líquida (%)', format: fmtPct },
+
+                { key: 'dividendYield', name: 'Dividend Yield (%)', format: fmtPct },
+                { key: 'priceToEarnings', name: 'P/L', format: fmtMult },
+                { key: 'priceToEarningsToGrowth', name: 'PEG', format: fmtMult },
+                { key: 'priceToBook', name: 'P/VP', format: fmtMult },
+                { key: 'priceToAssets', name: 'P/Ativos', format: fmtMult },
+                { key: 'priceToEbit', name: 'P/EBIT', format: fmtMult },
+                { key: 'priceToEbitda', name: 'P/EBITDA', format: fmtMult },
+                { key: 'priceToSales', name: 'P/Receita (PSR)', format: fmtMult },
+                { key: 'priceToNetCurrentAsset', name: 'P/Ativo Circ. Líq.', format: fmtMult },
+                { key: 'enterpriseValueToEbit', name: 'EV/EBIT', format: fmtMult },
+                { key: 'enterpriseValueToEbitda', name: 'EV/EBITDA', format: fmtMult },
+
+                { key: 'returnOnInvestedCapital', name: 'ROIC (%)', format: fmtPct },
+                { key: 'returnOnEquity', name: 'ROE (%)', format: fmtPct },
+                { key: 'returnOnAsset', name: 'ROA (%)', format: fmtPct },
+                { key: 'growthRate', name: 'Taxa de Crescimento (%)', format: fmtPct },
+
+                { key: 'earningsPerShare', name: 'LPA', format: fmtShare },
+                { key: 'bookValuePerShare', name: 'VPA', format: fmtShare },
+                { key: 'dividendPerShare', name: 'DPA', format: fmtShare },
+                { key: 'salesPerShare', name: 'Receita por Ação', format: fmtShare },
+
+                { key: 'earningsDate', name: 'Data dos Resultados', format: fmtDate },
+                { key: 'analysisDate', name: 'Data da Análise', format: fmtDate },
+                { key: 'hasAnalysis', name: 'Possui Análise', format: fmtBool },
+            ]
+
+            const visibleFields = filters
+                ? allFields.filter(f => filters[f.key])
+                : allFields
+
+            output = {
+                symbol: fundamentals.symbol,
+                topPick,
+                fundamentalist: visibleFields.map(f => ({
+                    name: f.name,
+                    value: (fundamentals[f.key] !== undefined && fundamentals[f.key] !== null) ? f.format(fundamentals[f.key]) : '-'
+                }))
+            }
+        }
+
+        return {
+            output_type: 'content_card@fundamentalist',
+            output_status: fundamentals ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataFundamentalsRecommendation() {
+
+        const fundamentals = await this.marketDataService.getFundamentals(this.selectedSymbol)
+        const topPick = await this.marketDataService.getIsTopPick(this.selectedSymbol)
+
+        let output = undefined
+        if (fundamentals) {
+            output = {
+                symbol: fundamentals.symbol,
+                topPick
+            }
+        }
+
+        return {
+            output_type: 'content_card@asset_detail',
+            output_status: fundamentals ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataFundamentalsSummary() {
+
+        const data = this.outputCard.data
+
+        let output = undefined
+        if (data) {
+            output = {
+                "symbol": this.selectedSymbol,
+                "thesis": data.fullSummary
+            }
+        }
+
+        return {
+            output_type: "content_card@summary",
+            output_status: data ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataTopPicks() {
+
+        const output = this.outputCard.sector
+
+        return {
+            output_type: "content_card@top_picks",
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataTopPicksSectors() {
+
+        const sectors = this.outputCard?.sectors
+
+        let output = undefined
+        if (sectors?.length) {
+            output = { sectors }
+        }
+
+        return {
+            output_type: 'content_card@top_picks_sectors',
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    async getDataOrders() {
+
+        let output = undefined
+
+        let orders = this.outputCard?.orders
+        if (!orders) {
+            orders = await this.loadOrders()
+        }
+
+        if (orders?.length) {
+            output = orders.map(o => {
+                return {
+                    orderId: o.orderId,
+                    account: o.account,
+                    symbol: o.symbol,
+                    side: o.side,
+                    quantity: o.quantity,
+                    quantityMin: o.quantityMin,
+                    quantityDisplay: o.quantityDisplay,
+                    priceType: o.priceType,
+                    price: o.priceLimit,
+                    trigger: o.priceTrigger,
+                    expireType: o.expireType,
+                    expireTime: o.expireTime,
+                    creationTime: o.creationTime,
+                    orderStatus: o.orderStatus,
+                    statusText: o.statusText,
+                    requestType: o.requestType,
+                    requestStatus: o.requestStatus,
+                    pendingQuantity: o.pendingQuantity,
+                    filledQuantity: o.filledQuantity,
+                    filledAveragePrice: o.filledAveragePrice,
+                    filledVolume: o.filledVolume,
+                    pendingVolume: o.pendingVolume
+                }
+            })
+        }
+
+        return {
+            output_type: "open_order_card",
+            output_status: output ? 'success' : 'not_found',
+            output
+        }
+    }
+
+    getDataRequests() {
+
+        const allRequests = this.outputCard?.requests ?? this.getAllRequests()
+
+        // verifica se alguma boleta tem pendência
+        const isIncomplete = (r) =>
+            !r.requestType ||
+            !r.account ||
+            !r.symbol ||
+            !r.side ||
+            (!r.quantity && !r.volume) ||
+            (r.priceType !== 'M' && !r.priceLimit) ||
+            (!r.expireType && !r.expireTime)
+
+        const hasIncomplete = allRequests.some(isIncomplete)
+
+        const output = allRequests.map(r => ({
+            requestType: r.requestType || '',
+            orderId: r.orderId || '',
+            account: r.account || '',
+            symbol: r.symbol || '',
+            side: r.side || '',
+            quantity: r.quantity || 0,
+            quantityDisplay: r.quantityDisplay || 0,
+            volume: r.volume || 0,
+            priceType: r.priceType || '',
+            price: r.priceLimit || '',
+            trigger: r.priceTrigger || '',
+            expireType: r.expireType || '',
+            expireDate: r.expireTime ? new Date(r.expireTime).toISOString().split('T')[0] : '',
+            strategy: 'P'
+        }))
+
+        let output_type = 'order_card'
+        if (allRequests.length > 1) {
+            output_type = 'basket_card'
+        } else if (allRequests.length == 1) {
+            if (allRequests[0].requestType == 'M') {
+                output_type = 'order_card@modify'
+            } else if (allRequests[0].requestType == 'X') {
+                output_type = 'order_card@cancel'
+            }
+        }
+
+        return {
+            output_type,
+            output_status: hasIncomplete ? 'incomplete' : 'success',
+            output
+        }
+    }
+}
 
 class TraderAgent extends BaseAgent {
     /* # COMMAND
@@ -2599,8 +4398,591 @@ class TraderAgent extends BaseAgent {
         return { type, operation, total: created.length, created, skipped, status: 'ok' }
     }
 
+    // ===== comandos migrados do antigo content-agent (Research) =====
+    /* # COMMAND
+
+    obtem indicadores fundamentalistas e recomendações produzidas pelo time de time de Research.
+    
+    @note[out] SIGLA de recomendação não deve aparecer. Deve ser reescrito para forma descritiva [B]->Compra ou [S]->Venda ou [N]->Neutro
+
+    @input fields: arr[str] -> [ symbol, marketCapital, enterpriseValue, assets, equity, equityToAssets, currentAssets, netCurrentAssets, liabilities, currentLiabilities, currentRatio, netDebtToEbitda, assetTurnover, priceToCapitalTurnover, capitalTurnover, grossDebt, grossDebtToEquity, netDebt, netDebtToEbit, netDebtToEquity, netRevenue, ebit, ebitda, netIncome, grossMargin, ebitMargin, ebitdaMargin, netMargin, dividendYield, priceToEarnings, priceToEarningsToGrowth, priceToBook, priceToAssets, priceToEbit, priceToEbitda, priceToSales, priceToNetCurrentAsset, enterpriseValueToEbit, enterpriseValueToEbitda, returnOnInvestedCapital, returnOnEquity, returnOnAsset, growthRate, earningsPerShare, bookValuePerShare, dividendPerShare, salesPerShare, earningsDate, hasAnalysis, analysisDate, recommendation, targetPrice, upside ]
+
+    @output symbol:                  string -> código/ticker do ativo
+    @output marketCapital:           number -> valor de mercado (Market Cap)
+    @output enterpriseValue:         number -> valor da firma (Enterprise Value, EV)
+    @output assets:                  number -> ativo total
+    @output equity:                  number -> patrimônio líquido
+    @output equityToAssets:          number -> patrimônio líquido sobre ativo total, em percentual
+    @output currentAssets:           number -> ativo circulante
+    @output netCurrentAssets:        number -> ativo circulante líquido (capital de giro)
+    @output liabilities:             number -> passivo total
+    @output currentLiabilities:      number -> passivo circulante
+    @output currentRatio:            number -> liquidez corrente
+    @output netDebtToEbitda:         number -> dívida líquida sobre EBITDA
+    @output assetTurnover:           number -> giro do ativo
+    @output priceToCapitalTurnover:  number -> preço sobre giro do capital
+    @output capitalTurnover:         number -> giro do capital
+    @output grossDebt:               number -> dívida bruta
+    @output grossDebtToEquity:       number -> dívida bruta sobre patrimônio líquido
+    @output netDebt:                 number -> dívida líquida
+    @output netDebtToEbit:           number -> dívida líquida sobre EBIT
+    @output netDebtToEquity:         number -> dívida líquida sobre patrimônio líquido
+    @output netRevenue:              number -> receita líquida
+    @output ebit:                    number -> lucro antes de juros e impostos (EBIT)
+    @output ebitda:                  number -> EBIT antes de depreciação e amortização (EBITDA)
+    @output netIncome:               number -> lucro líquido
+    @output grossMargin:             number -> margem bruta em percentual
+    @output ebitMargin:              number -> margem EBIT em percentual
+    @output ebitdaMargin:            number -> margem EBITDA em percentual
+    @output netMargin:               number -> margem líquida em percentual
+    @output dividendYield:           number -> rendimento de dividendos em percentual
+    @output priceToEarnings:         number -> índice Preço/Lucro (P/L)
+    @output priceToEarningsToGrowth: number -> índice PEG (P/L sobre crescimento)
+    @output priceToBook:             number -> índice Preço/Valor Patrimonial (P/VP)
+    @output priceToAssets:           number -> índice Preço/Ativos
+    @output priceToEbit:             number -> índice Preço/EBIT (P/EBIT)
+    @output priceToEbitda:           number -> índice Preço/EBITDA (P/EBITDA)
+    @output priceToSales:            number -> índice Preço/Receita (PSR)
+    @output priceToNetCurrentAsset:  number -> índice Preço/Ativo Circulante Líquido
+    @output enterpriseValueToEbit:   number -> índice EV/EBIT
+    @output enterpriseValueToEbitda: number -> índice EV/EBITDA
+    @output returnOnInvestedCapital: number -> retorno sobre capital investido em percentual (ROIC)
+    @output returnOnEquity:          number -> retorno sobre patrimônio líquido em percentual (ROE)
+    @output returnOnAsset:           number -> retorno sobre ativos em percentual (ROA)
+    @output growthRate:              number -> taxa de crescimento em percentual
+    @output earningsPerShare:        number -> lucro por ação (LPA)
+    @output bookValuePerShare:       number -> valor patrimonial por ação (VPA)
+    @output dividendPerShare:        number -> dividendos por ação (DPA)
+    @output salesPerShare:           number -> receita por ação
+    @output earningsDate:            date   -> data de divulgação dos resultados
+    @output hasAnalysis:             bool   -> indica se há análise de Research disponível
+    @output analysisDate:            date   -> data de referência da análise
+    @output recommendation:          string -> recomendação do analista [B]->Compra [N]->Neutro [S]->Venda
+    @output targetPrice:             number -> preço-alvo estimado pelo analista
+    @output upside:                  number -> potencial de valorização em percentual
+
+    @example [user] qual o P/L de ABCD11?                  -> { "type": "getFundamentals", "fields": [ "priceToEarnings" ] }
+    @example [user] EV/EBITDA e dívida líquida de VALE3    -> { "type": "getFundamentals", "fields": [ "enterpriseValueToEbitda", "netDebt", "netDebtToEbitda" ] }
+    @example [user] margens de PETR4                       -> { "type": "getFundamentals", "fields": [ "grossMargin", "ebitMargin", "ebitdaMargin", "netMargin" ] }
+    @example [user] qual a recomendação para ABCD11?       -> { "type": "getFundamentals", "fields": [ "recommendation", "targetPrice", "upside" ] }
+    @example [user] qual o dividend yield da SampleCorp?   -> { "type": "getFundamentals", "fields": [ "dividendYield" ] }
+    @example [user] qual o ROE e ROIC de PETR4?            -> { "type": "getFundamentals", "fields": [ "returnOnEquity", "returnOnInvestedCapital" ] }
+    @example [user] múltiplos de VALE3                     -> { "type": "getFundamentals", "fields": [ "priceToEarnings", "priceToBook", "priceToEbit", "dividendYield" ] }
+    @example [user] market cap de ITUB4                    -> { "type": "getFundamentals", "fields": [ "marketCapital" ] }
+
+    */
+    async getFundamentals({ type, fields }) {
+
+        this.querySymbolCommand = { type, fields }
+
+        if (!this.selectedSymbol) {
+            return AgentRuntime.instruction(type, 'nenhum ativo selecionado - solicite ao usuário que informe um ativo válido')
+        }
+
+        const fundamentais = await this.marketDataService.getFundamentals(this.selectedSymbol)
+        if (!fundamentais) {
+            return AgentRuntime.instruction(type, 'informe que dado não encontrados')
+        }
+
+        const fundamentalistFields = [
+            'marketCapital', 'enterpriseValue',
+            'assets', 'equity', 'equityToAssets',
+            'currentAssets', 'netCurrentAssets',
+            'liabilities', 'currentLiabilities', 'currentRatio',
+            'grossDebt', 'grossDebtToEquity',
+            'netDebt', 'netDebtToEbit', 'netDebtToEbitda', 'netDebtToEquity',
+            'assetTurnover', 'capitalTurnover', 'priceToCapitalTurnover',
+            'netRevenue', 'ebit', 'ebitda', 'netIncome',
+            'grossMargin', 'ebitMargin', 'ebitdaMargin', 'netMargin',
+            'dividendYield',
+            'priceToEarnings', 'priceToEarningsToGrowth', 'priceToBook', 'priceToAssets',
+            'priceToEbit', 'priceToEbitda', 'priceToSales', 'priceToNetCurrentAsset',
+            'enterpriseValueToEbit', 'enterpriseValueToEbitda',
+            'returnOnInvestedCapital', 'returnOnEquity', 'returnOnAsset', 'growthRate',
+            'earningsPerShare', 'bookValuePerShare', 'dividendPerShare', 'salesPerShare'
+        ]
+
+        const recommendationFields = ['recommendation', 'targetPrice', 'upside']
+        const metaFields = ['earningsDate', 'analysisDate']
+
+        const allFields = [...fundamentalistFields, ...recommendationFields, metaFields]
+
+        if (!fields || fields.length == 0) {
+            fields = allFields
+        }
+
+        let data = {}
+        for (let field of fields) {
+            data[field] = fundamentais[field]
+        }
+
+        if (recommendationFields.some(f => fields.includes(f)) && !fundamentalistFields.some(f => fields.includes(f))) {
+            this.outputCard = { type: 'fundamentals_recommendation' }
+        } else {
+            this.outputCard = { type: 'fundamentals', fields }
+        }
+
+        return { type, symbol: this.selectedSymbol, data }
+    }
+
+    /* # COMMAND
+
+    obtem relatório de análise, avaliação fundamentalista e tese de investimento produzido pelo time de time de Research. Representa a visão estratégica do banco para o ativo.
+    
+    @note Apresentar relatório como explicação sobre motivo para recomendação NÃO caracteriza questões específicas sobre relatório em si.
+
+    @note[out] 'dataOverlay' representa valores online, mais recentes. Se disponível, sobreescrever valores no texto 'fullSummary'.
+    @note[out] SIGLA de recomendação não deve aparecer. Deve ser reescrito para forma descritiva [B]->Compra ou [S]->Venda ou [N]->Neutro
+    @note[out] Somente usar questions quando o usuário pedir interpretação do relatório/tese
+
+    @input fields: arr[str] -> [ fullSummary, generationDate ]
+    @input questions : arr[str] -> dúvidas de interpretação do conteúdos apresentados no relatório. Exemplo: causa efeito, impactos, etc... Pergunda sobre motivo ou explicação abrangente da recomendação NÂO deve ser incluída neste campo.
+
+    @output text: string -> texto completo do relatório de análise e tese de investimento
+    @output analysisDate: date -> data de publicação da análise
+
+    @example [user] quero ver o relatório da SampleCorp -> { "type": "getFundamentalsSummary", fields: [ "fullSummary" ] }
+    @example [user] como os analistas enxergam SampleCorp -> { "type": "getFundamentalsSummary", fields: [ "fullSummary" ] }
+    @example [user] qual tese de investimentos para a ABCD11 -> { "type": "getFundamentalsSummary", fields: [ "fullSummary" ] }
+    @example [user] quando foi a última análise de ABCD11? -> { "type": "getFundamentalsSummary", fields: [ "generationDate" ] }
+
+    */
+    async getFundamentalsSummary({ type, fields, questions }) {
+
+        this.querySymbolCommand = { type, fields }
+
+        if (!this.selectedSymbol) {
+            return AgentRuntime.instruction(type, 'nenhum ativo selecionado - solicite ao usuário que informe um ativo válido')
+        }
+
+        const summary = await this.marketDataService.getFundamentalsSummary(this.selectedSymbol)
+        if (!summary) {
+            return AgentRuntime.instruction(type, 'informe que dados não encontrados')
+        }
+
+        if (questions?.length > 0) {
+            return AgentRuntime.instruction(type, '!!! IMPORTANT - informe que não tem competência para responder ao que foi solicitado. Indique utilização da Plataforma Trader Desktop para acesso completo ao relatório original.')
+        }
+
+        if (!fields || fields.length == 0) {
+            fields = ['fullSummary', 'generationDate']
+        }
+
+        let data = {}
+        for (let field of fields) {
+            data[field] = summary[field]
+        }
+
+        let dataOverlay = undefined
+        if (data.fullSummary) {
+            const fundamentals = await this.marketDataService.getFundamentals(this.selectedSymbol)
+            if (fundamentals) {
+                dataOverlay = [
+                    { label: 'P/L', value: fundamentals.priceToEarnings },
+                    { label: 'P/VP', value: fundamentals.priceToBook },
+                    { label: 'Dividend Yield', value: fundamentals.dividendYield },
+                    { label: 'Recomendação', value: fundamentals.recommendation },
+                    { label: 'Preço-Alvo', value: fundamentals.targetPrice },
+                    { label: 'Upside', value: fundamentals.upside },
+                ]
+            }
+        }
+
+        this.outputCard = { type: 'fundamentals_summary', symbol: this.selectedSymbol, data }
+
+        return { type, symbol: this.selectedSymbol, data, dataOverlay }
+    }
+
+    /* # COMMAND
+
+    obtem análise consolidada da carteira/portfolio da conta selecionada, produzida pelo time de time de Research
+
+    @note pré-requisito: conta selecionada em memória — emitir [selectAccount] antes se necessário
+    @note retorna a análise textual da carteira como visão estratégica do banco para o conjunto de posições da conta
+    @note[out] apresentar o texto da análise integralmente — NÃO resumir, interpretar, complementar ou emitir opinião própria
+
+    @output text: string -> texto completo da análise de carteira
+
+    @example [isDigitalMode][user] análise da minha carteira -> { "type": "getPortfolioAnalysis" }
+    @example [isDigitalMode][user] como está minha carteira segundo o Research -> { "type": "getPortfolioAnalysis" }
+    @example [isAdminMode][user] análise da carteira do cliente -> { "type": "getPortfolioAnalysis" }
+    @example [isAdminMode][user] análise da carteira da conta 123456 -> [ { "type": "selectAccount", "accountId": "123456" }, { "type": "getPortfolioAnalysis" } ]
+
+    */
+    async getPortfolioAnalysis({ type }) {
+
+        if (!this.selectedAccount) {
+            return AgentRuntime.instruction(type, 'nenhuma conta selecionada - solicite ao usuário que informe uma conta válida')
+        }
+
+        const analysis = await this.portfolioRecommender.getPortfolioAnalysis(this.selectedAccount)
+        if (!analysis) {
+            return AgentRuntime.instruction(type, 'informe que a análise da carteira selecionada não está disponível')
+        }
+
+        this.outputCard = { type: 'portfolio_analysis' }
+
+        return { type, account: this.selectedAccount, analysis }
+    }
+
+    /* # COMMAND
+    
+    lista os ativos EM CARTEIRA da conta selecionada apontados pela camada recommender do Research — as posições desalinhadas das recomendações, candidatas a VENDA/TROCA
+    
+    @note esta é a PRIMEIRA FASE de uma operação de TROCA de ativos / otimização de portfolio: identifica O QUE vender antes de definir POR QUAL ativo trocar
+    @note intenções de TROCAR ativos, OTIMIZAR/AJUSTAR/REBALANCEAR a carteira, MELHORAR a alocação, "adequar ao Research", "o que devo trocar/vender segundo o Research" são GATILHOS deste comando — mesmo sem citar um ativo específico
+    @note fluxo completo da troca: [getPortfolioRecommendationSell] (fase 1 — lista posições a vender) → usuário escolhe o ativo → [executePortfolioRecommendation] (fase 2 — gera o par venda→compra)
+    @note NÃO gera boletas nem executa ordens — apenas LISTA as posições candidatas. A geração do par de troca é feita por [executePortfolioRecommendation]
+    @note pré-requisito: conta selecionada em memória — emitir [selectAccount] antes se necessário
+    @note retorna apenas ativos que o cliente JÁ possui em carteira E que constam como posição a ajustar na camada recommender — cruza recomendações com posições vigentes
+    @note[out] apresentar a lista de ativos a vender/trocar e sugira que o usuário escolha qual deseja trocar — NÃO emitir opinião, análise ou justificativa própria
+    
+    @output account:  string -> conta consultada
+    @output data:     obj[]  -> posições candidatas a venda/troca — { account, sector, symbol, quantity, volume }
+    
+    @example [isDigitalMode][user] quero trocar ativos da minha carteira                 -> { "type": "getPortfolioRecommendationSell" }
+    @example [isDigitalMode][user] como posso otimizar meu portfolio                      -> { "type": "getPortfolioRecommendationSell" }
+    @example [isDigitalMode][user] o que devo trocar/vender segundo o Research        -> { "type": "getPortfolioRecommendationSell" }
+    @example [isDigitalMode][user] quero melhorar a alocação da minha carteira            -> { "type": "getPortfolioRecommendationSell" }
+    @example [isDigitalMode][user] quais posições estão desalinhadas das recomendações    -> { "type": "getPortfolioRecommendationSell" }
+    @example [isAdminMode][user] o que trocar na carteira da conta 123456                 -> [ { "type": "selectAccount", "accountId": "123456" }, { "type": "getPortfolioRecommendationSell" } ]
+    @example [isAdminMode][user] vamos rebalancear o portfolio do cliente 123456          -> [ { "type": "selectAccount", "accountId": "123456" }, { "type": "getPortfolioRecommendationSell" } ]
+    
+    */
+    async getPortfolioRecommendationSell({ type }) {
+
+        this.queryAccountCommand = { type }
+
+        // pré-requisito: conta selecionada
+        if (!this.selectedAccount) {
+            return AgentRuntime.instruction(type, 'nenhuma conta selecionada - solicite ao usuário que informe uma conta válida')
+        }
+
+        // recomendações do Research (par posição -> recomendação)
+        const recommendations = await this.portfolioRecommender.getPortfolioRecommendation(this.selectedAccount)
+        if (!Array.isArray(recommendations) || !recommendations.length) {
+            return AgentRuntime.instruction(type, 'informe que não há recomendações de venda disponíveis para a carteira no momento')
+        }
+
+        // posições vigentes da carteira
+        const positions = await this.positionService.getPositions(this.selectedAccount)
+
+        // símbolos indicados como posição a ajustar (lado da venda)
+        const sellSymbols = new Set(
+            recommendations
+                .map(r => r.positionSymbol?.toUpperCase())
+                .filter(o => !o.startsWith('BPAC'))
+                .filter(Boolean)
+        )
+
+        // cruza recomendações com posições realmente existentes em carteira
+        const data = (positions || [])
+            .filter(p => sellSymbols.has(p.symbol?.toUpperCase()) && Math.abs(p.totalQuantity || 0) > 0)
+            .map(p => ({
+                account: this.selectedAccount,
+                symbol: p.symbol,
+                quantity: Math.abs(p.totalQuantity),
+                volume: p.volume,
+                profit: p.profit,
+                profitPercent: p.profitPercent,
+            }))
+
+        this.outputCard = { type: 'portfolio_recommendation_sell', data }
+
+        return { type, account: this.selectedAccount, data, state: 'PortfolioRecommendationSell' }
+    }
+
+    /* # COMMAND [PortfolioRecommendationSell]
+
+    lista os ativos recomendados pelo Research como ALTERNATIVAS DE COMPRA para substituir uma posição desalinhada — a SEGUNDA FASE da operação de TROCA de ativos
+
+    @note esta é a SEGUNDA FASE da troca: após [getPortfolioRecommendationSell] identificar O QUE vender, este comando lista POR QUAL ativo trocar
+    @note recebe [symbol] — o ativo em carteira a ser substituído (a posição SEM recomendação apresentada anteriormente). Se omitido, assume o ativo selecionado em memória ([selectedSymbol])
+    @note intenções como "o que sugere para trocar XXXX", "o que alocar no lugar de XXXX", "por qual ativo trocar XXXX", "alternativas para substituir XXXX" são GATILHOS deste comando
+    @note fluxo completo da troca: [getPortfolioRecommendationSell] (fase 1 — posições a vender) → [getPortfolioRecommendationBuy] (fase 2 — alternativas de compra) → [executePortfolioRecommendation] (fase 3 — gera o par venda→compra)
+    @note NÃO gera boletas nem executa ordens — apenas LISTA as alternativas recomendadas. A geração do par de troca é feita por [executePortfolioRecommendation]
+    @note pré-requisito: conta selecionada em memória — emitir [selectAccount] antes se necessário
+    @note cruza as recomendações do Research com a posição informada — retorna os ativos indicados como substitutos ([recommendationSymbol]) para o ativo em carteira ([positionSymbol])
+    @note[out] apresentar a lista de ativos recomendados e sugerir que o usuário escolha para qual deseja trocar — NÃO emitir opinião, análise ou justificativa própria
+
+    @input symbol: str -> ativo em carteira a ser substituído na troca. Se omitido, assume [selectedSymbol]
+
+    @output account: string -> conta consultada
+    @output symbol:  string -> ativo a ser substituído (posição de origem)
+    @output data:    obj[]  -> alternativas de compra recomendadas — { sector, symbol, topPick, recommendation, targetPrice, upside }
+
+    @example [isDigitalMode][user] o que sugere para troca de PETR4         -> [ { "type": "selectSymbol", "symbol": "PETR4" }, { "type": "getPortfolioRecommendationBuy", "symbol": "PETR4" } ]
+    @example [isDigitalMode][user] o que podemos alocar no lugar de VALE3   -> [ { "type": "selectSymbol", "symbol": "VALE3" }, { "type": "getPortfolioRecommendationBuy", "symbol": "VALE3" } ]
+    @example [isDigitalMode][user] por qual ativo trocar ITUB4             -> [ { "type": "selectSymbol", "symbol": "ITUB4" }, { "type": "getPortfolioRecommendationBuy", "symbol": "ITUB4" } ]
+    @example [isAdminMode][user] alternativas para substituir BBAS3 na conta 123456 -> [ { "type": "selectAccount", "accountId": "123456" }, { "type": "selectSymbol", "symbol": "BBAS3" }, { "type": "getPortfolioRecommendationBuy", "symbol": "BBAS3" } ]
+
+    */
+    async getPortfolioRecommendationBuy({ type, symbol }) {
+
+        this.queryAccountCommand = { type }
+
+        // pré-requisito: conta selecionada
+        if (!this.selectedAccount) {
+            return AgentRuntime.instruction(type, 'nenhuma conta selecionada - solicite ao usuário que informe uma conta válida')
+        }
+
+        // ativo a ser substituído (posição de origem) — default selectedSymbol
+        symbol = (symbol ?? this.selectedSymbol)?.toUpperCase()
+        if (!symbol) {
+            return AgentRuntime.instruction(type, 'nenhum ativo informado - solicite ao usuário o ativo a ser trocado')
+        }
+
+        // setor do ativo a substituir
+        const sectors = await this.marketDataService.getSecuritiesSectors([symbol])
+        const sector = sectors?.[symbol]?.sector
+        if (!sector) {
+            return AgentRuntime.instruction(type, `nenhuma alternativa de troca recomendada para ${symbol}`)
+        }
+
+        // todas as recomendações de compra do mesmo setor (ranqueadas)
+        const ranked = await this.marketDataService.getRecommendationsRanked(sector)
+        if (!Array.isArray(ranked) || !ranked.length) {
+            return AgentRuntime.instruction(type, `nenhuma alternativa de troca recomendada para ${symbol}`)
+        }
+
+        // exclui o próprio ativo e o que a carteira já possui
+        const positions = await this.positionService.getPositions(this.selectedAccount)
+        const held = new Set(
+            (positions || [])
+                .filter(p => Math.abs(p.totalQuantity || 0) > 0)
+                .map(p => p.symbol?.toUpperCase())
+                .filter(Boolean)
+        )
+
+        const candidates = ranked.filter(r => {
+            const s = r.symbol?.toUpperCase()
+            return s && s !== symbol && !held.has(s)
+        })
+
+        if (!candidates.length) {
+            return AgentRuntime.instruction(type, `nenhuma alternativa de troca recomendada para ${symbol}`)
+        }
+
+        // enriquece com preço-alvo (targetPrice não vem no objeto de recomendação)
+        const data = []
+        for (const c of candidates) {
+
+            const buySymbol = c.symbol.toUpperCase()
+            const fundamentals = await this.marketDataService.getFundamentals(buySymbol)
+
+            data.push({
+                sector: c.sector,
+                symbol: buySymbol,
+                topPick: !!c.isTopPick,
+                recommendation: c.recommendation,
+                targetPrice: fundamentals?.targetPrice,
+                upside: c.upside ?? fundamentals?.upside,
+            })
+        }
+
+        this.portfolioRecommendationSellSymbol = symbol
+        this.outputCard = { type: 'portfolio_recommendation_buy', symbol, data }
+
+        return { type, account: this.selectedAccount, symbol, data, state: 'PortfolioRecommendationBuy' }
+    }
+
+    /* # COMMAND [PortfolioRecommendationBuy]
+
+    gera o PAR de ordens(boletas) de TROCA de ativo para adequação do portfolio conforme recomendações do time de time de Research
+
+    @note pré-requisito: conta selecionada em memória — emitir [selectAccount] antes se necessário
+    @note toda troca exige um PAR de ativos: [symbolSell] (posição em carteira a VENDER) → [symbolBuy] (ativo recomendado a COMPRAR). NÃO existe modo em lote/cesta — cada execução gera EXATAMENTE uma troca (uma venda + uma compra)
+    @note [symbolBuy] é OBRIGATÓRIO — é o ativo recomendado a ser comprado na troca
+    @note se [symbolSell] NÃO for informado, assume o ativo selecionado em memória ([selectedSymbol]) como a posição a vender
+    @note o par [symbolSell]→[symbolBuy] é VALIDADO contra as recomendações do Research — se a troca não constar entre as recomendações, a operação NÃO é gerada
+    @note a VENDA usa a QUANTIDADE TOTAL da posição de [symbolSell]; a COMPRA usa o VOLUME financeiro liberado pela venda
+    @note ao final, [symbolBuy] passa a ser o [selectedSymbol] e a boleta de COMPRA criada passa a ser a boleta selecionada ([selectedRequest])
+    @note se [symbolSell] não possuir posição em carteira, a troca não é gerada — não há quantidade a liquidar
+    @note boletas criadas como [M]ercado, validade [DAY] — ajustáveis individualmente ou em lote ([batchMode]) antes do envio
+
+    @input symbolSell: str -> ativo JÁ em carteira a ser VENDIDO na troca (posição). Se omitido, assume [selectedSymbol]
+    @input symbolBuy:  str -> ativo recomendado a ser COMPRADO na troca — gera ordem de COMPRA pelo VOLUME financeiro liberado. OBRIGATÓRIO
+
+    @output account:    string -> conta sobre a qual as boletas de troca foram geradas
+    @output symbolSell: string -> ativo vendido na troca
+    @output symbolBuy:  string -> ativo comprado na troca
+    @output sector:     string -> setor da troca recomendada
+    @output total:      number -> quantidade de boletas criadas (sempre 2: venda + compra)
+    @output created:    obj[]  -> boletas geradas — { sector, symbol, side, quantity | volume, requestId }
+    @output status:     string -> 'ok' quando o par de boletas foi gerado
+
+    @example [isDigitalMode][user] troca minha PETR4 por VALE3 conforme o Research          -> { "type": "executePortfolioRecommendation", "symbolSell": "PETR4", "symbolBuy": "VALE3" }
+    @example [isDigitalMode][user] (PETR4 selecionada) troca pela VALE3 recomendada     -> { "type": "executePortfolioRecommendation", "symbolBuy": "VALE3" }
+    @example [isAdminMode][user] troca ITUB4 por BBAS3 na conta 123456                  -> [ { "type": "selectAccount", "accountId": "123456" }, { "type": "executePortfolioRecommendation", "symbolSell": "ITUB4", "symbolBuy": "BBAS3" } ]
+
+    */
+    async executePortfolioRecommendation({ type, symbolSell, symbolBuy }) {
+
+        // 1) conta selecionada
+        if (!this.selectedAccount) {
+            return AgentRuntime.instruction(type, 'nenhuma conta selecionada - solicite ao usuário que informe uma conta válida')
+        }
+
+        // 2) par de troca: symbolSell (posição, default selectedSymbol) -> symbolBuy (recomendação, obrigatório)
+        symbolSell = (symbolSell ?? this.selectedSymbol)?.toUpperCase()   // sem symbolSell, assume o ativo selecionado
+        symbolBuy = symbolBuy?.toUpperCase()
+
+        if (!symbolSell) {
+            return AgentRuntime.instruction(type, 'questione qual ativo em carteira deve ser vendido na troca')
+        }
+        if (!symbolBuy) {
+            return AgentRuntime.instruction(type, 'questione qual ativo deve ser comprado na troca')
+        }
+
+        // 3) valida o par (venda -> compra) contra as recomendações do Research
+        const sector = await this.portfolioRecommender.validatePortfolioRecommendation(symbolSell, symbolBuy)
+        if (!sector) {
+            return AgentRuntime.instruction(type, `informe que a troca de ${symbolSell} por ${symbolBuy} não consta entre as recomendações do time de Research`)
+        }
+
+        const account = await this.accountService.getAccount(this.selectedAccount, { headers: this.headers })
+        if (!account) {
+            return AgentRuntime.instruction(type, 'conta não encontrada - não foi possível encontrar informações')
+        }
+
+        // 4) posição do ativo a vender — base da troca
+        const positions = await this.positionService.getPositions(account.account)
+        const position = (positions || []).find(p => p.symbol === symbolSell)
+        const totalQuantity = position?.totalQuantity || 0
+
+        if (!totalQuantity) {
+            return AgentRuntime.instruction(type, `informe que não há posição em ${symbolSell} para vender — a troca não pode ser gerada`)
+        }
+
+        const sellQuantity = Math.abs(totalQuantity)
+        const swapVolume = position.volume || undefined
+
+        if (!swapVolume) {
+            return AgentRuntime.instruction(type, `informe que não foi possível apurar o volume financeiro da posição em ${symbolSell} para a compra de ${symbolBuy}`)
+        }
+
+        // 5) gerar o PAR de boletas — VENDA por quantidade / COMPRA por volume financeiro
+        const accountContext = this.getAccountContext()
+        const created = []
+
+        const sellRequest = this.buildRequest({ symbol: symbolSell, side: 'S', quantity: sellQuantity })
+        accountContext.requests[sellRequest.requestId] = sellRequest
+        created.push({ sector, symbol: symbolSell, side: 'S', quantity: sellQuantity, requestId: sellRequest.requestId })
+
+        const buyRequest = this.buildRequest({ symbol: symbolBuy, side: 'B', volume: swapVolume })
+        accountContext.requests[buyRequest.requestId] = buyRequest
+        created.push({ sector, symbol: symbolBuy, side: 'B', volume: swapVolume, requestId: buyRequest.requestId })
+
+        // 6) foco final: ativo comprado como selectedSymbol e boleta de COMPRA como selectedRequest
+        accountContext.selectedRequestId = buyRequest.requestId
+        buyRequest.selectedTime = nowTick()
+
+        this.selectedSymbol = symbolBuy
+        this.selectedSecurityDescription = undefined
+        const security = await this.marketDataService.getSecurity(symbolBuy)
+        if (security) {
+            this.selectedSecurityDescription = security.description
+        }
+
+        this.outputCard = { type: 'requests' }
+
+        return { type, account: this.selectedAccount, symbolSell, symbolBuy, sector, total: created.length, created, status: 'ok' }
+    }
+
+    /* # COMMAND
+
+    verifica se um ativo é Top Pick do Research, ou lista os Top Picks de um setor específico
+
+    @note Top Pick representa as principais empresas de um setor com melhores avaliações de recomendação de compra do time de Research para um determinado setor
+    @note se [symbol] for informado, verifica se o ativo é Top Pick — ignora [sector]
+    @note se [sector] for informado sem [symbol], lista todos os Top Picks do setor
+    @note se nenhum parâmetro for informado, lista todos os Top Picks de todos os setores
+
+    @input symbol: str (opcional) -> ticker do ativo a verificar. Se informado, retorna status Top Pick do ativo
+    @input sector: str (opcional) -> setor para filtrar Top Picks. Valores possíveis: [Agronegócio, Aluguel de Carros & Logística, Construção Civil & Propriedades, Educação, Financeiro, Infraestrutura, Mineração & Siderurgia, Papel & Celulose, Petróleo & Gás, Saúde, Serviços Básicos, Telecom & Tecnologia, Varejo & Consumo]
+
+    @output isTopPick: bool     -> (quando symbol informado) indica se o ativo é Top Pick
+    @output symbol:    string   -> (quando symbol informado) ticker consultado
+    @output sector:    string   -> (quando symbol informado) setor do ativo, se for Top Pick
+    @output sectors:   obj[]    -> (quando sector informado) lista de setores com seus Top Picks — { sector, assets: string[] }
+
+    @example [user] PETR4 é top pick?                          -> [ { "type": "selectSymbol", "symbol": "PETR4" }, { "type": "getTopPicks", "symbol": "PETR4" } ]
+    @example [user] quais são os top picks de Financeiro?      -> { "type": "getTopPicks", "sector": "Financeiro" }
+    @example [user] top picks de Saúde                         -> { "type": "getTopPicks", "sector": "Saúde" }
+    @example [user] quais os top picks?                        -> { "type": "getTopPicks" }
+    @example [user] VALE3 está entre os top picks?             -> [ { "type": "selectSymbol", "symbol": "VALE3" }, { "type": "getTopPicks", "symbol": "VALE3" } ]
+
+    */
+    async getTopPicks({ type, symbol, sector }) {
+
+        if (symbol) {
+            this.querySymbolCommand = { type, symbol }
+        }
+
+        const topPicks = await this.marketDataService.getTopPicks()
+        if (!topPicks) {
+            return AgentRuntime.instruction(type, 'informe que dados de Top Picks não foram encontrados')
+        }
+
+        const allEntries = Object.values(topPicks)
+
+        // agrupa por setor — usado para listar e para validar setores conhecidos
+        const grouped = {}
+        for (const entry of allEntries) {
+            const s = entry.sector || 'Outros'
+            if (!grouped[s]) grouped[s] = []
+            grouped[s].push(entry.symbol)
+        }
+
+        // OBRIGATÓRIO symbol OU sector — sem nenhum, questiona o setor desejado
+        if (!symbol && !sector) {
+            const knownSectors = Object.keys(grouped).sort((a, b) => a.localeCompare(b))
+
+            if (!knownSectors.length) {
+                return AgentRuntime.instruction(type, 'informe que nenhuma Top Pick está disponível no momento')
+            }
+
+            this.outputCard = { type: 'top_picks_sectors', sectors: knownSectors }
+
+            return AgentRuntime.interrupt(
+                { type, sectors: knownSectors },
+                `apresente os setores disponíveis e questione de qual setor o usuário deseja conhecer as Top Picks: ${knownSectors.join(', ')}`,
+                'TopPicksSector'
+            )
+        }
+
+        // modo 1: verificar se ativo específico é top pick (ignora sector)
+        if (symbol) {
+            const entry = topPicks[symbol.toUpperCase()]
+            const isTopPick = !!entry
+
+            this.outputCard = { type: 'fundamentals_recommendation' }
+
+            return {
+                type,
+                symbol: symbol.toUpperCase(),
+                isTopPick,
+                sector: entry?.sector ?? null
+            }
+        }
+
+        // modo 2: listar top picks do setor informado
+        const sectors = Object.entries(grouped)
+            .filter(([s]) => s === sector)
+            .map(([s, assets]) => ({ sector: s, assets }))
+
+        this.outputCard = { type: 'top_picks', sector: sectors?.[0] }
+
+        return {
+            type,
+            sectors,
+            total: sectors.length
+        }
+    }
+
 }
 
+// --- metadados de versão dos comandos (decorators tool) ---
 TraderAgent.agentName = 'trader'
 
 tool({ version: '1.0.0', name: 'querySymbol' })(TraderAgent, 'querySymbol')
@@ -2642,5 +5024,15 @@ tool({ version: '1.0.0', name: 'setRequestQuantityFromPosition' })(TraderAgent, 
 tool({ version: '1.0.0', name: 'setRequestVolumeFromPosition' })(TraderAgent, 'setRequestVolumeFromPosition')
 tool({ version: '1.0.0', name: 'createRequestsFromPositions' })(TraderAgent, 'createRequestsFromPositions')
 tool({ version: '1.0.1', name: 'getLendingRate' })(TraderAgent, 'getLendingRate')
+tool({ version: '1.0.0', name: 'getFundamentals' })(TraderAgent, 'getFundamentals')
+tool({ version: '1.0.0', name: 'getFundamentalsSummary' })(TraderAgent, 'getFundamentalsSummary')
+tool({ version: '1.0.0', name: 'getPortfolioAnalysis' })(TraderAgent, 'getPortfolioAnalysis')
+tool({ version: '1.0.0', name: 'getPortfolioRecommendationSell' })(TraderAgent, 'getPortfolioRecommendationSell')
+tool({ version: '1.0.0', name: 'getPortfolioRecommendationBuy' })(TraderAgent, 'getPortfolioRecommendationBuy')
+tool({ version: '1.0.0', name: 'executePortfolioRecommendation' })(TraderAgent, 'executePortfolioRecommendation')
+tool({ version: '1.0.0', name: 'getTopPicks' })(TraderAgent, 'getTopPicks')
 
-module.exports = { TraderAgent }
+AgentRuntime.agentClasses['trader-agent'] = TraderAgent
+TraderAgent.commandSources = [{ agent: 'trader', class: TraderAgent }]
+
+module.exports = { TraderAgent, BaseAgent, tool, nowTick, DEFAULT_PAGE_SIZE }
